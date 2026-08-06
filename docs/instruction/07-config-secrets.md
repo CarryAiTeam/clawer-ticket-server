@@ -192,7 +192,7 @@ export class EnvSecretProvider implements SecretProvider {
   "mcpServers": {
     "clawer-ticket": {
       "command": "npx",
-      "args": ["-y", "clawer-ticket-server@1.0.0"],
+      "args": ["-y", "@carry-dream/clawer-ticket-server@1.0.0"],
       "env": {
         "CLAWER_TICKET_CONFIG_PATH": "D:/secure/clawer-ticket.config.json",
         "ONES_READ_TOKEN": "<管理员批准的只读机器 token>"

@@ -92,7 +92,7 @@ src/
   "mcpServers": {
     "clawer-ticket": {
       "command": "npx",
-      "args": ["-y", "clawer-ticket-server@1.0.0"],
+      "args": ["-y", "@carry-dream/clawer-ticket-server@1.0.0"],
       "env": {
         "CLAWER_TICKET_CONFIG_PATH": "D:/secure/clawer-ticket.config.json"
       }

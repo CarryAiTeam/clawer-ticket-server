@@ -73,7 +73,7 @@ ONES 富文本图片会以 `<img data-uuid>` 形式引用与附件列表相同�
   "mcpServers": {
     "clawer-ticket": {
       "command": "npx",
-      "args": ["-y", "clawer-ticket-server@1.0.0"],
+      "args": ["-y", "@carry-dream/clawer-ticket-server@1.0.0"],
       "env": {
         "CLAWER_TICKET_CONFIG_PATH": "D:/secure/clawer-ticket.config.json",
         "ONES_READ_TOKEN": "REPLACE_WITH_APPROVED_READ_TOKEN"
@@ -87,9 +87,9 @@ GraphQL 模式需要将 `ONES_READ_TOKEN` 替换为管理员批准的只读机�
 
 ## 从 npm 使用
 
-发布后，MCP 客户端会通过 `npx` 下载并在本机启动固定版本的 `clawer-ticket-server`，无需克隆或构建本仓库。配置文件和凭据不包含在 npm 包内：先从 `config/` 复制合适的 `*.example.json` 到受 Git 忽略的本地安全位置，再将 `CLAWER_TICKET_CONFIG_PATH` 指向它。GraphQL 模式还需在启动环境中提供 `secretRef` 所引用的只读令牌；browser 模式不需要该令牌。
+发布后，MCP 客户端会通过 `npx` 下载并在本机启动固定版本的 `@carry-dream/clawer-ticket-server`，无需克隆或构建本仓库。配置文件和凭据不包含在 npm 包内：先从 `config/` 复制合适的 `*.example.json` 到受 Git 忽略的本地安全位置，再将 `CLAWER_TICKET_CONFIG_PATH` 指向它。GraphQL 模式还需在启动环境中提供 `secretRef` 所引用的只读令牌；browser 模式不需要该令牌。
 
-请固定使用已验证的版本号，例如 `clawer-ticket-server@1.0.0`，而不要省略版本号跟随 `latest`。
+请固定使用已验证的版本号，例如 `@carry-dream/clawer-ticket-server@1.0.0`，而不要省略版本号跟随 `latest`。
 
 ## 开发
 

@@ -35,7 +35,7 @@
 
 ```json
 {
-  "name": "clawer-ticket-server",
+  "name": "@carry-dream/clawer-ticket-server",
   "version": "1.0.0",
   "description": "Generic ticket-ingestion MCP server; ONES GraphQL is the first provider.",
   "main": "./dist/index.js",
@@ -126,7 +126,7 @@ test/
   "mcpServers": {
     "clawer-ticket": {
       "command": "npx",
-      "args": ["-y", "clawer-ticket-server@1.0.0"],
+      "args": ["-y", "@carry-dream/clawer-ticket-server@1.0.0"],
       "env": {
         "CLAWER_TICKET_CONFIG_PATH": "D:/secure/clawer-ticket.config.json",
         "ONES_READ_TOKEN": "<token>"
@@ -137,7 +137,7 @@ test/
 ```
 
 - 先 `npm run build` 生成 `dist/`。
-- 已发布版本由 MCP 客户端用 `npx -y clawer-ticket-server@<version>` 启动；源码开发时仍可用 `node dist/index.js`。
+- 已发布版本由 MCP 客户端用 `npx -y @carry-dream/clawer-ticket-server@<version>` 启动；源码开发时仍可用 `node dist/index.js`。
 - `env` 中提供配置路径与（GraphQL profile）token。
 - 入口仅使用标准输入/输出传输协议；**不要向标准输出添加普通日志**。
 

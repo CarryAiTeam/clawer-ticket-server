@@ -8,7 +8,7 @@ const packageJson = JSON.parse(await readFile(new URL("../../package.json", impo
   engines?: Record<string, string>;
 };
 
-assert.equal(packageJson.name, "clawer-ticket-server");
+assert.equal(packageJson.name, "@carry-dream/clawer-ticket-server");
 assert.deepEqual(packageJson.bin, { "clawer-ticket-server": "./dist/index.js" });
 assert.deepEqual(packageJson.files, ["dist", "config/*.example.json", "README.md"]);
 assert.equal(packageJson.engines?.node, ">=20");

@@ -1,5 +1,5 @@
 {
-  "name": "@carryaiteam/clawer-ticket-server",
+  "name": "@carry-dream/clawer-ticket-server",
   "version": "1.0.0",
   "description": "Generic ticket-ingestion MCP server",
   "main": "./dist/index.js",
