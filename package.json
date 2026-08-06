@@ -1,0 +1,49 @@
+{
+  "name": "@carryaiteam/clawer-ticket-server",
+  "version": "1.0.0",
+  "description": "Generic ticket-ingestion MCP server",
+  "main": "./dist/index.js",
+  "bin": {
+    "clawer-ticket-server": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "config/*.example.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CarryAiTeam/clawer-ticket-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CarryAiTeam/clawer-ticket-server/issues"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "prepack": "npm run build",
+    "test": "npm run build && tsx test/package/npm-package.test.ts && tsx test/config/config-examples.test.ts && tsx test/integration/providers/ones/ones-provider.test.ts && tsx test/mcp/ticket-tools.test.ts && tsx test/mcp/stdio.test.ts"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ticket"
+  ],
+  "author": "Carry3033",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "playwright-core": "^1.62.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
+  }
+}

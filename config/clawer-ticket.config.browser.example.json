@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0",
+  "storage": {
+    "root": "D:/ticket-exports"
+  },
+  "profiles": {
+    "ones-browser-my-open": {
+      "provider": "ones",
+      "source": "browser",
+      "product": "project",
+      "baseUrl": "https://tickets.example.com",
+      "teamId": "REPLACE_WITH_APPROVED_TEAM_ID",
+      "allowedHosts": ["tickets.example.com"],
+      "allowedProjects": ["REPLACE_WITH_APPROVED_PROJECT_UUID"],
+      "browser": {
+        "autoLogin": {
+          "email": "replace-with-local-login@example.com",
+          "password": "REPLACE_WITH_LOCAL_PASSWORD"
+        }
+      }
+    }
+  }
+}

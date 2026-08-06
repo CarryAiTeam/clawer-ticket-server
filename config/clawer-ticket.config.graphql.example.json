@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "storage": {
+    "root": "D:/ticket-exports"
+  },
+  "profiles": {
+    "ones-graphql-my-open": {
+      "provider": "ones",
+      "source": "graphql",
+      "product": "project",
+      "baseUrl": "https://tickets.example.com",
+      "teamId": "REPLACE_WITH_APPROVED_TEAM_ID",
+      "allowedHosts": ["tickets.example.com"],
+      "allowedProjects": ["REPLACE_WITH_APPROVED_PROJECT_UUID"],
+      "secretRef": "ONES_READ_TOKEN"
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "1.0",
+  "storage": {
+    "root": "D:/ticket-exports",
+    "retainRawSource": false,
+    "redaction": {
+      "omitPeople": false,
+      "removeFields": ["phone", "email"]
+    }
+  },
+  "profiles": {
+    "ones-graphql-my-open": {
+      "provider": "ones",
+      "source": "graphql",
+      "product": "project",
+      "baseUrl": "https://tickets.example.com",
+      "teamId": "REPLACE_WITH_APPROVED_TEAM_ID",
+      "allowedHosts": ["tickets.example.com"],
+      "allowedProjects": ["REPLACE_WITH_APPROVED_PROJECT_UUID"],
+      "listAssigneeFieldId": "REPLACE_WITH_ASSIGNEE_FIELD_UUID",
+      "secretRef": "ONES_READ_TOKEN",
+      "authentication": { "headerName": "Authorization", "scheme": "Bearer" },
+      "requestBudget": { "maxConcurrent": 1, "maxRequestsPerMinute": 20 },
+      "defaultView": "my_open_tree",
+      "inlineMaxChars": 12000,
+      "classificationRules": [
+        {
+          "name": "replace-with-classification-name",
+          "field": "importantField",
+          "fieldId": "REPLACE_WITH_CLASSIFICATION_FIELD_UUID",
+          "equals": "REPLACE_WITH_CLASSIFICATION_VALUE",
+          "class": "technical-change"
+        }
+      ]
+    },
+    "ones-browser-my-open": {
+      "provider": "ones",
+      "source": "browser",
+      "product": "project",
+      "baseUrl": "https://tickets.example.com",
+      "teamId": "REPLACE_WITH_APPROVED_TEAM_ID",
+      "allowedHosts": ["tickets.example.com"],
+      "allowedProjects": ["REPLACE_WITH_APPROVED_PROJECT_UUID"],
+      "listAssigneeFieldId": "REPLACE_WITH_ASSIGNEE_FIELD_UUID",
+      "requestBudget": { "maxConcurrent": 1, "maxRequestsPerMinute": 20 },
+      "defaultView": "my_open_tree",
+      "inlineMaxChars": 12000,
+      "classificationRules": [
+        {
+          "name": "replace-with-classification-name",
+          "field": "importantField",
+          "fieldId": "REPLACE_WITH_CLASSIFICATION_FIELD_UUID",
+          "equals": "REPLACE_WITH_CLASSIFICATION_VALUE",
+          "class": "technical-change"
+        }
+      ],
+      "browser": {
+        "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+        "myOpenViewUrl": "https://tickets.example.com/project/#/workspace/team/REPLACE_WITH_APPROVED_TEAM_ID/filter/view/REPLACE_WITH_MY_OPEN_VIEW_ID",
+        "autoLogin": {
+          "email": "replace-with-local-login@example.com",
+          "password": "REPLACE_WITH_LOCAL_PASSWORD",
+          "loginUrl": "https://tickets.example.com/login"
+        }
+      }
+    }
+  }
+}
