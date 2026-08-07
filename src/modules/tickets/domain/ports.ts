@@ -11,6 +11,8 @@ export interface TicketProfile {
 
 export interface TicketProfileResolver {
   get(name: string): TicketProfile;
+  /** 显式名称优先；仅配置一个 profile 时允许省略名称。 */
+  resolve(name?: string): TicketProfile;
 }
 
 export interface ConnectionStatus {

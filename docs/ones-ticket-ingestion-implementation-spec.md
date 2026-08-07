@@ -236,6 +236,7 @@ Windows Credential Manager 可作为后续适配器；不得为了它把密码�
 | 代码 | 含义 | 调用方动作 |
 | --- | --- | --- |
 | `PROFILE_NOT_FOUND` | profile 不存在 | 修正配置 |
+| `PROFILE_REQUIRED` | 配置多个 profile 但调用未指定 | 明确指定一个 profile |
 | `CONTRACT_UNCONFIGURED` | OnES 接口契约仍是占位符 | 由管理员提供已验证文档/样本 |
 | `SECRET_UNAVAILABLE` | 本机未注入凭据 | 本机安全设置环境变量/密钥库 |
 | `SOURCE_UNAUTHORIZED` | 401/403 | 让管理员检查只读权限 |

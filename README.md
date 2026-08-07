@@ -14,6 +14,8 @@
 - `ticket_export`：默认 `plan`；只有显式 `mode: "write"` 才会写入本机。写入时默认下载附件和富文本图片；传入 `media: "metadata"` 可只保存元数据。
 - `ticket_export_my_open_tasks`：对全部匹配待办生成计划或落盘；仅在全部详情读取成功后才开始写入。写入时同样默认下载媒体。
 
+当本机配置只有一个 `profile` 时，以上工具可以省略 `profile`，服务端会使用唯一配置项；显式传入 `profile` 时始终按该名称选择。配置多个 profile 时，省略 `profile` 会返回 `PROFILE_REQUIRED` 和可选名称，绝不会按配置顺序或随机选择。
+
 导出目录结构：
 
 ```text

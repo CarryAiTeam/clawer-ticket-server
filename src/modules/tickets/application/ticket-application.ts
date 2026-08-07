@@ -17,29 +17,29 @@ export class TicketApplication {
   constructor(private readonly dependencies: TicketApplicationDependencies) {}
 
   /** 查询 profile 的连接状态，并返回受控的 provider 与项目范围信息。 */
-  async connectionStatus(profile: string) {
+  async connectionStatus(profile?: string) {
     const selectedProfile = this.profile(profile);
     const status = await this.dependencies.provider.status(selectedProfile);
-    return { profile, provider: selectedProfile.providerId, connector: selectedProfile.connector, allowedProjects: selectedProfile.allowedProjects, ...status };
+    return { profile: selectedProfile.name, provider: selectedProfile.providerId, connector: selectedProfile.connector, allowedProjects: selectedProfile.allowedProjects, ...status };
   }
 
   /** 打开指定 profile 的受监督浏览器会话。 */
-  async openBrowserSession(profile: string) {
+  async openBrowserSession(profile?: string) {
     return this.browserSessions().openBrowserSession(this.profile(profile));
   }
 
   /** 关闭指定 profile 的受监督浏览器会话并清理内存登录态。 */
-  async closeBrowserSession(profile: string): Promise<void> {
+  async closeBrowserSession(profile?: string): Promise<void> {
     await this.browserSessions().closeBrowserSession(this.profile(profile));
   }
 
   /** 读取当前用户未完成工单的树形索引，不获取详情。 */
-  async listMyOpen(profile: string, limit: number) {
+  async listMyOpen(profile: string | undefined, limit: number) {
     return this.dependencies.provider.listMyOpen(this.profile(profile), limit);
   }
 
   /** 逐条读取匹配工单的完整详情；任何一条不完整都会整体失败，绝不以列表摘要代替详情。 */
-  async listMyOpenDetails(profile: string, limit: number) {
+  async listMyOpenDetails(profile: string | undefined, limit: number) {
     const index = await this.listMyOpen(profile, limit);
     if (index.page.hasNextPage) {
       throw new TicketError("SOURCE_INCOMPLETE", "The requested limit does not cover every matching work item; increase limit before requesting details");
@@ -57,7 +57,7 @@ export class TicketApplication {
   }
 
   /** 获取一张已归一化、通过项目范围校验且完成脱敏的工单。 */
-  async getTicket(profile: string, reference: TicketReference): Promise<CanonicalTicket> {
+  async getTicket(profile: string | undefined, reference: TicketReference): Promise<CanonicalTicket> {
     const selectedProfile = this.profile(profile);
     const ticket = await this.dependencies.provider.getTicket(selectedProfile, reference);
     if (selectedProfile.allowedProjects.length > 0 && (!ticket.source.projectId || !selectedProfile.allowedProjects.includes(ticket.source.projectId))) {
@@ -67,13 +67,13 @@ export class TicketApplication {
   }
 
   /** 获取适合 MCP 内联返回的工单详情，并限制正文体积。 */
-  async getTicketInline(profile: string, reference: TicketReference): Promise<InlineTicket> {
+  async getTicketInline(profile: string | undefined, reference: TicketReference): Promise<InlineTicket> {
     const selectedProfile = this.profile(profile);
-    return projectTicketForInline(await this.getTicket(profile, reference), selectedProfile.inlineMaxChars);
+    return projectTicketForInline(await this.getTicket(selectedProfile.name, reference), selectedProfile.inlineMaxChars);
   }
 
   /** 为单张工单生成导出计划或显式写入本地 bundle；默认下载媒体，metadata 可关闭下载。 */
-  async exportTicket(profile: string, reference: TicketReference, mode: "plan" | "write", mediaMode: TicketMediaMode = "download"): Promise<ExportPlan | ExportResult> {
+  async exportTicket(profile: string | undefined, reference: TicketReference, mode: "plan" | "write", mediaMode: TicketMediaMode = "download"): Promise<ExportPlan | ExportResult> {
     const ticket = await this.getTicket(profile, reference);
     const media = mediaMode === "download" ? this.mediaPlan(ticket) : [];
     if (mode === "plan") return this.dependencies.bundleStore.plan(ticket, media);
@@ -81,7 +81,7 @@ export class TicketApplication {
   }
 
   /** 先读取全部详情再批量导出，避免失败时落盘不完整的摘要数据。 */
-  async exportMyOpenTickets(profile: string, limit: number, mode: "plan" | "write", mediaMode: TicketMediaMode = "download", statuses?: string[]) {
+  async exportMyOpenTickets(profile: string | undefined, limit: number, mode: "plan" | "write", mediaMode: TicketMediaMode = "download", statuses?: string[]) {
     const detailed = await this.listMyOpenDetailsForExport(profile, limit, statuses);
     const exports: Array<ExportPlan | ExportResult> = [];
     for (const ticket of detailed.tickets) {
@@ -99,7 +99,7 @@ export class TicketApplication {
   }
 
   /** 仅读取指定状态的详情；未提供筛选时保留“全部未完成”的默认行为。 */
-  private async listMyOpenDetailsForExport(profile: string, limit: number, statuses?: string[]) {
+  private async listMyOpenDetailsForExport(profile: string | undefined, limit: number, statuses?: string[]) {
     const index = await this.listMyOpen(profile, limit);
     if (index.page.hasNextPage) {
       throw new TicketError("SOURCE_INCOMPLETE", "The requested limit does not cover every matching work item; increase limit before exporting");
@@ -118,7 +118,7 @@ export class TicketApplication {
   }
 
   /** 已验证媒体只暂存一次；仅将缺失文件下载到同一原子导出会话。 */
-  private async downloadMissingMedia(profile: string, ticket: CanonicalTicket, media: TicketMediaPlan[]): Promise<ExportResult> {
+  private async downloadMissingMedia(profile: string | undefined, ticket: CanonicalTicket, media: TicketMediaPlan[]): Promise<ExportResult> {
     const session = await this.dependencies.bundleStore.beginExport(ticket, media);
     const selectedProfile = this.profile(profile);
     try {
@@ -161,10 +161,10 @@ export class TicketApplication {
   }
 
   /** 解析并校验 profile 与当前注入 provider 是否匹配。 */
-  private profile(name: string): TicketProfile {
-    const profile = this.dependencies.profiles.get(name);
+  private profile(name?: string): TicketProfile {
+    const profile = this.dependencies.profiles.resolve(name);
     if (profile.providerId !== this.dependencies.provider.providerId) {
-      throw new TicketError("PROVIDER_NOT_AVAILABLE", `Profile ${name} requires provider ${profile.providerId}, but ${this.dependencies.provider.providerId} is configured`);
+      throw new TicketError("PROVIDER_NOT_AVAILABLE", `Profile ${profile.name} requires provider ${profile.providerId}, but ${this.dependencies.provider.providerId} is configured`);
     }
     return profile;
   }

@@ -1,5 +1,6 @@
 export type TicketErrorCode =
   | "PROFILE_NOT_FOUND"
+  | "PROFILE_REQUIRED"
   | "CONFIG_INVALID"
   | "SECRET_UNAVAILABLE"
   | "SOURCE_UNAUTHORIZED"
