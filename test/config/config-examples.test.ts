@@ -20,14 +20,14 @@ assert.equal(browserProfile.requestBudget.maxConcurrent, 1);
 assert.equal(browserProfile.requestBudget.maxRequestsPerMinute, 20);
 assert.equal(browserProfile.browser?.autoLogin?.email, "replace-with-local-login@example.com");
 assert.equal(browserProfile.browser?.autoLogin?.password, "REPLACE_WITH_LOCAL_PASSWORD");
-assert.equal(browserProfile.listAssigneeFieldId, undefined);
+assert.equal("listAssigneeFieldId" in browserProfile, false);
 
 const referenceExample = parseConfig(JSON.parse(await readFile(new URL("../../config/clawer-ticket.config.example.json", import.meta.url), "utf8")) as unknown);
 const referenceGraphql = referenceExample.profiles["ones-graphql-my-open"]!;
 const referenceBrowser = referenceExample.profiles["ones-browser-my-open"]!;
-assert.equal(referenceGraphql.listAssigneeFieldId, "REPLACE_WITH_ASSIGNEE_FIELD_UUID");
 assert.equal(referenceGraphql.classificationRules[0]?.fieldId, "REPLACE_WITH_CLASSIFICATION_FIELD_UUID");
 assert.equal(referenceBrowser.browser?.autoLogin?.loginUrl, "https://tickets.example.com/login");
-assert.equal(referenceBrowser.listAssigneeFieldId, "REPLACE_WITH_ASSIGNEE_FIELD_UUID");
+assert.equal("defaultView" in referenceGraphql, false);
+assert.equal("myOpenViewUrl" in (referenceBrowser.browser ?? {}), false);
 
 console.log("Public configuration examples validate against the runtime schema.");

@@ -1,6 +1,6 @@
 import { getProfile, OnesConfig, OnesProfile } from "./ones-config.js";
 import { HttpClient, FetchHttpClient, parseJsonResponse } from "../../infrastructure/http/fetch-http-client.js";
-import { CanonicalTicket, TicketAttachment, TicketIndexItem, TicketIndexTree, TicketReference } from "../../modules/tickets/domain/ticket.js";
+import { CanonicalTicket, TicketAttachment, TicketReference, TicketSearchProviderResult, TicketSearchQuery, TicketSummary } from "../../modules/tickets/domain/ticket.js";
 import { TicketError as OnesError } from "../../modules/tickets/domain/ticket-error.js";
 import { ConnectionStatus, TicketMediaDownload, TicketMediaProvider, TicketProfile, TicketProvider } from "../../modules/tickets/domain/ports.js";
 import { SecretProvider, EnvSecretProvider } from "../../infrastructure/security/env-secret-provider.js";
@@ -9,27 +9,19 @@ import { OnesRawTicketData } from "./ones-contracts.js";
 
 type UnknownRecord = Record<string, unknown>;
 
-const MY_OPEN_TREE_QUERY = `{
-  buckets(groupBy: $groupBy, orderBy: $groupOrderBy, pagination: $pagination, filter: $groupFilter) {
+/** 与已归档的 ONES 列表样本保持同一 bucket、filterGroup 与 cursor 分页契约。 */
+const SEARCH_QUERY = `{
+  buckets(groupBy: $groupBy, orderBy: $groupOrderBy, pagination: $pagination) {
     key
-    tasks(filterGroup: $filterGroup, orderBy: $orderBy, limit: $taskLimit, includeAncestors: { pathField: "path" }, orderByPath: "path") {
-      key name uuid serverUpdateStamp number path subTaskCount subTaskDoneCount position
+    tasks(filterGroup: $filterGroup, orderBy: $orderBy, limit: 2000) {
+      key name uuid number
       status { uuid name category }
       assign { uuid name }
-      deadline(unit: ONESDATE)
-      subTasks { uuid }
-      issueType { uuid manhourStatisticMode }
-      subIssueType { uuid manhourStatisticMode }
       project { uuid }
-      parent { uuid }
-      importantField { bgColor color name value fieldUUID }
     }
-    pageInfo { count totalCount startPos endPos hasNextPage preciseCount }
+    pageInfo { count totalCount startCursor endCursor hasNextPage }
   }
 }`;
-
-/** 使用相同固定筛选条件，但不包含仅用于树结构的父级行。 */
-const MY_OPEN_MATCHED_QUERY = MY_OPEN_TREE_QUERY.replace(', includeAncestors: { pathField: "path" }', "");
 
 /** ONES 工单详情视图使用的字段；应与附件查询保持独立。 */
 const DETAIL_QUERY = `query TaskDetail($key: Key) {
@@ -80,6 +72,53 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/** 连接状态只需执行一个最小的受控搜索，不再依赖旧的树形待办查询。 */
+export function myOpenTicketSearchQuery(size: number): TicketSearchQuery {
+  return {
+    preset: "my_open",
+    filter: {
+      all: [
+        { field: "statusCategory", op: "notIn", values: ["done"] },
+        { field: "assignee", op: "in", values: ["me"] },
+      ],
+    },
+    sort: { field: "createTime", direction: "desc" },
+    page: { size },
+  };
+}
+
+/** 将规范领域查询编译为已验证的 ONES 列表 variables；MCP 输入不直接参与此过程。 */
+export function compileOnesTicketSearchVariables(profile: OnesProfile, query: TicketSearchQuery): UnknownRecord {
+  if (query.sort.field !== "createTime" || query.sort.direction !== "desc") {
+    throw new OnesError("QUERY_INVALID", "ONES ticket search only supports createTime descending order");
+  }
+  if (!Number.isInteger(query.page.size) || query.page.size < 1 || query.page.size > 50) {
+    throw new OnesError("QUERY_INVALID", "ONES ticket search page size must be between 1 and 50");
+  }
+  const filterGroup: UnknownRecord = {};
+  for (const filter of query.filter.all) {
+    if (filter.field === "title" && filter.op === "contains") filterGroup.name_match = filter.value;
+    else if (filter.field === "issueType" && filter.op === "in") filterGroup.issueType_in = filter.values;
+    else if (filter.field === "statusCategory" && filter.op === "in") filterGroup.statusCategory_in = filter.values;
+    else if (filter.field === "statusCategory" && filter.op === "notIn") filterGroup.statusCategory_notIn = filter.values;
+    else if (filter.field === "assignee" && filter.op === "in" && filter.values.length === 1 && filter.values[0] === "me") filterGroup.assign_in = ["$currentUser"];
+    else throw new OnesError("UNSUPPORTED_FILTER", "The requested ticket filter is not supported by the ONES v1 adapter");
+  }
+  // 项目范围来自受控 profile，而非公共 filter；它只能收窄而不能由调用方扩大。
+  if (profile.allowedProjects.length > 0) filterGroup.project_in = [...profile.allowedProjects];
+  return {
+    groupBy: { tasks: {} },
+    groupOrderBy: null,
+    orderBy: { createTime: "DESC" },
+    filterGroup: [filterGroup],
+    search: null,
+    pagination: {
+      limit: query.page.size,
+      ...(query.page.after ? { after: query.page.after } : { preciseCount: false }),
+    },
+  };
+}
+
 class OnesRateLimitError extends OnesError {
   constructor(message: string, readonly retryAfterMs?: number) {
     super("SOURCE_RATE_LIMITED", message);
@@ -107,10 +146,8 @@ export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
 
   /** 通过最小只读查询确认 profile 配置和授权状态。 */
   async status(ticketProfile: TicketProfile): Promise<ConnectionStatus> {
-    const profile = this.profileFor(ticketProfile);
     try {
-      await this.resolveToken(profile);
-      await this.graphql(profile, MY_OPEN_MATCHED_QUERY, this.myOpenVariables(profile, 1), "authorizationProbe");
+      await this.search(ticketProfile, myOpenTicketSearchQuery(1));
       return {
         configured: true,
         credentialAvailable: true,
@@ -128,52 +165,41 @@ export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
     }
   }
 
-  /** 获取当前用户未完成工单树，并区分匹配项与父级上下文项。 */
-  async listMyOpen(ticketProfile: TicketProfile, limit: number): Promise<TicketIndexTree> {
+  /** 执行已验证的扁平列表查询，并把 ONES pageInfo 映射为 provider-neutral 分页结果。 */
+  async search(ticketProfile: TicketProfile, query: TicketSearchQuery): Promise<TicketSearchProviderResult> {
     const profile = this.profileFor(ticketProfile);
-    const safeLimit = Math.min(Math.max(limit, 1), 1_000);
-    const variables = this.myOpenVariables(profile, safeLimit);
-    const response = await this.graphql(profile, MY_OPEN_TREE_QUERY, variables);
-    const matchedResponse = await this.graphql(profile, MY_OPEN_MATCHED_QUERY, variables);
-    const data = asRecord(response).data;
-    const bucket = asArray(asRecord(data).buckets)[0];
-    const bucketRecord = asRecord(bucket);
-    const items = asArray(bucketRecord.tasks)
-      .map((task) => this.normalizeIndexItem(profile, task))
-      .filter((item) => profile.allowedProjects.length === 0 || (item.projectId !== undefined && profile.allowedProjects.includes(item.projectId)));
-    const matchedBucket = asRecord(asArray(asRecord(asRecord(matchedResponse).data).buckets)[0]);
-    const matchedIds = new Set(
-      asArray(matchedBucket.tasks)
-        .map((task) => this.normalizeIndexItem(profile, task))
-        .filter((item) => profile.allowedProjects.length === 0 || (item.projectId !== undefined && profile.allowedProjects.includes(item.projectId)))
-        .map((item) => item.id),
-    );
-    const roots: string[] = [];
-    const externalParentIds: string[] = [];
-    for (const item of items) {
-      item.matchedFilter = matchedIds.has(item.id);
-      item.includedAsAncestor = !item.matchedFilter;
-      if (!item.parentId) roots.push(item.id);
-      else if (!items.some((candidate) => candidate.id === item.parentId)) externalParentIds.push(item.parentId);
+    const response = await this.graphql(profile, SEARCH_QUERY, compileOnesTicketSearchVariables(profile, query), "searchGraphql");
+    const buckets = asArray(asRecord(asRecord(response).data).buckets);
+    if (buckets.length === 0) {
+      return { items: [], page: { returned: 0, totalCount: 0, hasNextPage: false } };
     }
-    const pageInfo = asRecord(bucketRecord.pageInfo);
-    const matchedPageInfo = asRecord(matchedBucket.pageInfo);
-    const preciseMatchedCount = typeof matchedPageInfo.preciseCount === "number"
-      ? matchedPageInfo.preciseCount
-      : typeof matchedPageInfo.totalCount === "number"
-        ? matchedPageInfo.totalCount
-        : matchedIds.size;
+    const bucket = asRecord(buckets[0]);
+    const rawTasks = asArray(bucket.tasks);
+    const items = rawTasks.map((task) => this.normalizeSearchSummary(profile, task));
+    const pageInfo = asRecord(bucket.pageInfo);
+    const returned = pageInfo.count;
+    const totalCount = pageInfo.totalCount;
+    if (typeof returned !== "number" || !Number.isSafeInteger(returned) || returned < 0 || returned !== items.length) {
+      throw new OnesError("SOURCE_SCHEMA_CHANGED", "searchGraphql returned an inconsistent pageInfo.count");
+    }
+    if (typeof totalCount !== "number" || !Number.isSafeInteger(totalCount) || totalCount < returned) {
+      throw new OnesError("SOURCE_SCHEMA_CHANGED", "searchGraphql returned an invalid pageInfo.totalCount");
+    }
+    if (typeof pageInfo.hasNextPage !== "boolean") {
+      throw new OnesError("SOURCE_SCHEMA_CHANGED", "searchGraphql returned an invalid pageInfo.hasNextPage continuation flag");
+    }
+    const hasNextPage = pageInfo.hasNextPage;
+    const endCursor = stringValue(pageInfo.endCursor);
+    if (hasNextPage && !endCursor) {
+      throw new OnesError("SOURCE_SCHEMA_CHANGED", "searchGraphql reported another page without pageInfo.endCursor");
+    }
     return {
-      view: "my_open_tree",
       items,
-      roots,
-      externalParentIds: [...new Set(externalParentIds)],
       page: {
-        count: items.length,
-        matchedCount: preciseMatchedCount,
-        contextCount: items.length - matchedIds.size,
-        totalCount: typeof pageInfo.totalCount === "number" ? pageInfo.totalCount : undefined,
-        hasNextPage: matchedPageInfo.hasNextPage === true,
+        returned,
+        totalCount,
+        hasNextPage,
+        ...(endCursor ? { endCursor } : {}),
       },
     };
   }
@@ -248,53 +274,41 @@ export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
     }
   }
 
-  /** 生成与 ONES“我负责且未完成”视图一致的查询变量。 */
-  private myOpenVariables(profile: OnesProfile, limit: number): UnknownRecord {
-    return {
-      groupBy: { tasks: {} },
-      groupOrderBy: null,
-      // 与已认证的 ONES 筛选视图保持一致：工单分页位于单个 bucket 中，
-      // UI 会显式请求完整树结构。
-      orderBy: { position: "ASC", createTime: "DESC" },
-      filterGroup: [{
-        statusCategory_notIn: ["done"],
-        assign_in: ["$currentUser"],
-        ...(profile.allowedProjects.length > 0 ? { project_in: profile.allowedProjects } : {}),
-      }],
-      groupFilter: null,
-      pagination: { limit: Math.min(limit, 50), preciseCount: false },
-      taskLimit: 2_000,
-    };
-  }
-
-  /** 将 ONES 列表行映射为通用树索引项。 */
-  protected normalizeIndexItem(profile: OnesProfile, raw: unknown): TicketIndexItem {
+  /** 将 ONES 列表行映射为平铺摘要，并在 provider 边界再次强制项目 allowlist。 */
+  protected normalizeSearchSummary(profile: OnesProfile, raw: unknown): TicketSummary {
     const task = asRecord(raw);
-    const status = asRecord(task.status);
-    const assign = asRecord(task.assign);
-    const parent = asRecord(task.parent);
-    const subTasks = asArray(task.subTasks).map((entry) => stringValue(asRecord(entry).uuid)).filter((id): id is string => Boolean(id));
-    const project = asRecord(task.project);
     const id = stringValue(task.uuid);
-    if (!id) throw new OnesError("SOURCE_SCHEMA_CHANGED", "List item is missing uuid");
-    const importantFields = asArray(task.importantField);
-    const assigneeField = profile.listAssigneeFieldId
-      ? importantFields.find((field) => asRecord(field).fieldUUID === profile.listAssigneeFieldId)
-      : undefined;
+    if (!id) throw new OnesError("SOURCE_SCHEMA_CHANGED", "Search item is missing uuid");
+    const project = asRecord(task.project);
+    const projectId = stringValue(project.uuid);
+    if (profile.allowedProjects.length > 0 && (!projectId || !profile.allowedProjects.includes(projectId))) {
+      throw new OnesError("SOURCE_NOT_ALLOWED", "Search item project is outside the profile allowlist");
+    }
+    const status = asRecord(task.status);
+    const category = stringValue(status.category);
+    if (category && category !== "to_do" && category !== "in_progress" && category !== "done") {
+      throw new OnesError("SOURCE_SCHEMA_CHANGED", "Search item contains an unsupported status category");
+    }
+    const assignee = asRecord(task.assign);
+    const assigneeId = stringValue(assignee.uuid);
+    const assigneeName = stringValue(assignee.name);
+    const number = typeof task.number === "number" || typeof task.number === "string" ? String(task.number) : undefined;
     return {
       id,
-      key: stringValue(task.key),
+      ...(stringValue(task.key) ? { key: stringValue(task.key) } : {}),
+      ...(number ? { number } : {}),
       title: stringValue(task.name) ?? id,
-      status: stringValue(status.name),
-      assignee: stringValue(assign.uuid) || stringValue(assign.name)
-        ? { id: stringValue(assign.uuid), displayName: stringValue(assign.name) }
-        : assigneeField ? { displayName: stringValue(asRecord(assigneeField).value) } : undefined,
-      projectId: stringValue(project.uuid),
-      parentId: stringValue(parent.uuid),
-      path: stringValue(task.path),
-      childIds: subTasks,
-      matchedFilter: "unknown",
-      includedAsAncestor: false,
+      ...(stringValue(status.uuid) || stringValue(status.name) || category
+        ? {
+          status: {
+            ...(stringValue(status.uuid) ? { id: stringValue(status.uuid) } : {}),
+            ...(stringValue(status.name) ? { name: stringValue(status.name) } : {}),
+            ...(category ? { category: category as "to_do" | "in_progress" | "done" } : {}),
+          },
+        }
+        : {}),
+      ...(assigneeId || assigneeName ? { assignee: { ...(assigneeId ? { id: assigneeId } : {}), ...(assigneeName ? { displayName: assigneeName } : {}) } } : {}),
+      ...(projectId ? { projectId } : {}),
     };
   }
 

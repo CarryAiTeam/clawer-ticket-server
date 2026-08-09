@@ -21,8 +21,6 @@ const profileSchema = z.object({
   teamId: z.string().min(1),
   allowedHosts: z.array(z.string().min(1)).min(1),
   allowedProjects: z.array(z.string().min(1)).default([]),
-  /** 仅用于列表展示的租户专属 importantField UUID。 */
-  listAssigneeFieldId: z.string().min(1).optional(),
   /** 保存已批准只读机器凭据的环境变量或密钥存储条目名称。 */
   secretRef: z.string().min(1).optional(),
   authentication: z
@@ -34,13 +32,10 @@ const profileSchema = z.object({
   requestBudget: z
     .object({ maxConcurrent: z.literal(1).default(1), maxRequestsPerMinute: z.number().int().min(1).max(120).default(20) })
     .default({ maxConcurrent: 1, maxRequestsPerMinute: 20 }),
-  defaultView: z.literal("my_open_tree").default("my_open_tree"),
   inlineMaxChars: z.number().int().min(1_000).max(100_000).default(12_000),
   classificationRules: z.array(classificationRuleSchema).default([]),
   browser: z.object({
     executablePath: z.string().min(1).optional(),
-    /** 受控 ONES 筛选视图 URL，仅用于校准浏览器可见的工单行。 */
-    myOpenViewUrl: z.url().optional(),
     /** 可选直登凭据，只能存放于本地且被 Git 忽略的配置文件。 */
     autoLogin: z.object({
       email: z.string().email(),
@@ -84,9 +79,6 @@ export function parseConfig(parsed: unknown): OnesConfig {
     const host = new URL(profile.baseUrl).host;
     if (!profile.allowedHosts.includes(host)) {
       throw new TicketError("CONFIG_INVALID", `baseUrl host ${host} is not in allowedHosts`);
-    }
-    if (profile.browser?.myOpenViewUrl && !profile.allowedHosts.includes(new URL(profile.browser.myOpenViewUrl).host)) {
-      throw new TicketError("CONFIG_INVALID", "browser.myOpenViewUrl host is not in allowedHosts");
     }
     if (profile.browser?.autoLogin?.loginUrl && !profile.allowedHosts.includes(new URL(profile.browser.autoLogin.loginUrl).host)) {
       throw new TicketError("CONFIG_INVALID", "browser.autoLogin.loginUrl host is not in allowedHosts");

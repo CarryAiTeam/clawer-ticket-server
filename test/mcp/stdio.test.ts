@@ -15,7 +15,9 @@ try {
   await client.connect(transport);
   const { tools } = await client.listTools();
   assert.ok(tools.some((tool) => tool.name === "ticket_export"));
-  assert.ok(tools.some((tool) => tool.name === "ticket_export_my_open_tasks"));
+  assert.ok(tools.some((tool) => tool.name === "ticket_search"));
+  assert.ok(!tools.some((tool) => tool.name === "ticket_my_open_tasks"));
+  assert.ok(!tools.some((tool) => tool.name === "ticket_export_my_open_tasks"));
   assert.ok(tools.some((tool) => tool.name === "ticket_browser_connect"));
   assert.ok(tools.some((tool) => tool.name === "ticket_browser_disconnect"));
   console.log("MCP stdio smoke test passed.");

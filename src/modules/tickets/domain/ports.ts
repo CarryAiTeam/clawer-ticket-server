@@ -1,4 +1,4 @@
-import { CanonicalTicket, TicketAttachment, TicketIndexTree, TicketReference } from "./ticket.js";
+import { CanonicalTicket, TicketAttachment, TicketReference, TicketSearchProviderResult, TicketSearchQuery } from "./ticket.js";
 
 /** 受控本地工单 profile 中与 provider 无关的部分。 */
 export interface TicketProfile {
@@ -26,7 +26,8 @@ export interface ConnectionStatus {
 export interface TicketProvider {
   readonly providerId: string;
   status(profile: TicketProfile): Promise<ConnectionStatus>;
-  listMyOpen(profile: TicketProfile, limit: number): Promise<TicketIndexTree>;
+  /** 只接受应用层规范化后的查询；provider 原始表达式不属于此 port。 */
+  search(profile: TicketProfile, query: TicketSearchQuery): Promise<TicketSearchProviderResult>;
   getTicket(profile: TicketProfile, reference: TicketReference): Promise<CanonicalTicket>;
 }
 

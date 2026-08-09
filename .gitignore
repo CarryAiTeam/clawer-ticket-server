@@ -19,3 +19,6 @@ config/*.local.json
 .codex
 .agents
 AGENTS.md
+
+.cloudpivot-cli
+cloudpivot-lock.json
