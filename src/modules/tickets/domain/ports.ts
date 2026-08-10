@@ -40,7 +40,12 @@ export interface TicketMediaDownload {
 
 /** 显式能力边界：读取工单元数据不等于下载二进制媒体。 */
 export interface TicketMediaProvider {
-  downloadAttachment(profile: TicketProfile, attachment: TicketAttachment): Promise<TicketMediaDownload>;
+  downloadAttachment(profile: TicketProfile, attachment: TicketAttachment, options?: TicketMediaDownloadOptions): Promise<TicketMediaDownload>;
+}
+
+export interface TicketMediaDownloadOptions {
+  /** provider 应在读取响应体前尽可能执行的单文件上限。 */
+  maxBytes?: number;
 }
 
 export type TicketMediaMode = "metadata" | "download";

@@ -30,12 +30,15 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
   ]);
   const searchWhereSchema = z.object({ all: z.array(ticketFilterSchema).min(1).max(16) }).strict();
   const searchPageSchema = z.object({ size: z.number().int().min(1).max(50).optional(), cursor: z.string().min(1).max(512).optional() }).strict();
-  const searchQuerySchema = z.object({ preset: z.enum(["my_open", "my_active", "all"]).optional(), where: searchWhereSchema.optional() }).strict();
+  const searchScopeSchema = z.enum(["self", "project"]).describe("Ticket ownership scope. Defaults to self; use project only when the user explicitly requests all people or the whole project.");
+  const searchStateSchema = z.enum(["open", "active", "done", "all"]).describe("Ticket status scope. Defaults to open; all includes completed tickets.");
+  const searchQuerySchema = z.object({ scope: searchScopeSchema.optional(), state: searchStateSchema.optional(), where: searchWhereSchema.optional() }).strict();
   const invalidSearchInput = Symbol("invalid-ticket-search-input");
   const invalidTicketExportInput = Symbol("invalid-ticket-export-input");
   const ticketSearchInputSchema = z.object({
     profile: profileSchema,
-    preset: z.enum(["my_open", "my_active", "all"]).default("my_open"),
+    scope: searchScopeSchema.default("self"),
+    state: searchStateSchema.default("open"),
     where: searchWhereSchema.optional(),
     page: searchPageSchema.optional(),
   }).strict().catch(() => invalidSearchInput as never);
@@ -99,7 +102,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_search",
     {
       title: "Search ticket work items",
-      description: "Searches flat ticket summaries with the controlled my_open, my_active, or explicit all preset. Supports only a one-level AND of title contains, issue-type IDs, status categories, and assignee me. Results are fixed to createTime descending and nextCursor is an opaque server-issued token; raw ONES GraphQL, views, internal cursors, projects, other assignees, sorting, OR, and nested groups are rejected.",
+      description: "Read-only list search. Use for 查看、查阅、查询、列出 or generic 获取 ONES 工单; it returns flat summaries only and never downloads details or writes local files. Defaults are scope=self and state=open; use state=all for the current user's complete history, and scope=project only for an explicit all-people or whole-project request. Supports only a one-level AND of title contains, issue-type IDs, and status categories. Results are fixed to createTime descending and nextCursor is an opaque server-issued token.",
       inputSchema: ticketSearchInputSchema,
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -109,8 +112,8 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
         if ((input as unknown) === invalidSearchInput) {
           throw new TicketError("QUERY_INVALID", "ticket_search input does not match the V1 query schema");
         }
-        const { profile, preset, where, page } = input;
-        return textResult({ ok: true, ...(await (await getApplication()).searchTickets({ profile, preset, where, page })) });
+        const { profile, scope, state, where, page } = input;
+        return textResult({ ok: true, ...(await (await getApplication()).searchTickets({ profile, scope, state, where, page })) });
       } catch (error) {
         return errorResult(error);
       }
@@ -123,14 +126,14 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     ticket: ticketSchema.optional(),
     query: searchQuerySchema.optional(),
     selection: z.object({ expectedCount: z.number().int().min(0), fingerprint: z.string().regex(/^[a-f0-9]{64}$/i) }).strict().optional(),
-    mode: z.enum(["plan", "write"]).default("plan"),
-    media: z.enum(["metadata", "download"]).default("download"),
+    mode: z.enum(["plan", "write"]).default("plan").describe("plan is read-only; write commits a local bundle and requires confirmation"),
+    media: z.enum(["metadata", "download"]).default("download").describe("download includes attachment-backed images and binaries during write; metadata writes no binary media"),
   }).strict().catch(() => invalidTicketExportInput as never);
   server.registerTool(
     "ticket_get",
     {
       title: "Get a ticket work item",
-      description: "Reads one work item from the selected provider with details, message stream and attachment metadata.",
+      description: "Reads one work item for 查看详情、查阅详情 or 获取某工单详情. Returns bounded details, comments and attachment metadata only; it never writes local files or downloads binary media. Use ticket_search for generic 查看/查阅列表 and ticket_export for 下载到本地/导出/保存到本地.",
       inputSchema: { profile: profileSchema, ticket: ticketSchema },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -148,7 +151,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_export",
     {
       title: "Export a ticket work item",
-      description: "Plans or writes one normalized work item bundle, or a complete frozen ticket_search selection, locally. Query writes require the selection fingerprint returned by a prior plan. Write exports download media by default; temporary ONES URLs are never returned or persisted.",
+      description: "Local export for 下载到本地、导出、保存到本地 or 获取到本地. It fetches complete normalized details including comments and attachment-backed images. Always call mode=plan first; only an explicitly confirmed mode=write writes bundles. Query writes require the selection fingerprint returned by a prior plan, enforce item/media budgets, and return completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
       inputSchema: ticketExportInputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },

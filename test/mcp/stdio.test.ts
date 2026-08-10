@@ -14,12 +14,10 @@ const client = new Client({ name: "stdio-smoke-test", version: "1.0.0" });
 try {
   await client.connect(transport);
   const { tools } = await client.listTools();
-  assert.ok(tools.some((tool) => tool.name === "ticket_export"));
-  assert.ok(tools.some((tool) => tool.name === "ticket_search"));
-  assert.ok(!tools.some((tool) => tool.name === "ticket_my_open_tasks"));
-  assert.ok(!tools.some((tool) => tool.name === "ticket_export_my_open_tasks"));
-  assert.ok(tools.some((tool) => tool.name === "ticket_browser_connect"));
-  assert.ok(tools.some((tool) => tool.name === "ticket_browser_disconnect"));
+  assert.deepEqual(
+    tools.map((tool) => tool.name).sort(),
+    ["ticket_browser_connect", "ticket_browser_disconnect", "ticket_connection_status", "ticket_export", "ticket_get", "ticket_search"],
+  );
   console.log("MCP stdio smoke test passed.");
 } finally {
   await transport.close();

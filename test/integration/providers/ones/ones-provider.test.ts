@@ -8,6 +8,7 @@ import { TicketApplication, projectTicketForInline } from "../../../../src/modul
 import { OnesConfig, parseConfig } from "../../../../src/providers/ones/ones-config.js";
 import { HttpClient, HttpRequest, HttpResponse, parseJsonResponse } from "../../../../src/infrastructure/http/fetch-http-client.js";
 import { TicketSearchQuery } from "../../../../src/modules/tickets/domain/ticket.js";
+import { TicketError } from "../../../../src/modules/tickets/domain/ticket-error.js";
 import { TicketBundleStore, TicketProfile, TicketProvider } from "../../../../src/modules/tickets/domain/ports.js";
 import { compileOnesTicketSearchVariables, OnesGraphqlSource } from "../../../../src/providers/ones/ones-graphql-source.js";
 import { OnesBrowserSource } from "../../../../src/providers/ones/ones-browser-source.js";
@@ -400,7 +401,7 @@ try {
   const privateTicket = await privateApplication.getTicket("demo", { id: "task-1" });
   assert.equal(privateTicket.assignee, undefined);
   assert.equal(privateTicket.comments[0]?.author, undefined);
-  const privateSummary = await privateApplication.searchTickets({ profile: "demo", preset: "my_open" });
+  const privateSummary = await privateApplication.searchTickets({ profile: "demo", scope: "self", state: "open" });
   assert.equal(privateSummary.items[0]?.assignee, undefined, "search summaries must honor omitPeople redaction");
   const outOfScopeProvider: TicketProvider = {
     providerId: "ones",
@@ -415,12 +416,12 @@ try {
   };
   const outOfScopeApplication = createApplication(config, outOfScopeProvider, new LocalTicketBundleStore(root));
   await assert.rejects(
-    () => outOfScopeApplication.searchTickets({ profile: "demo", preset: "all" }),
+    () => outOfScopeApplication.searchTickets({ profile: "demo", scope: "project", state: "all" }),
     { name: "TicketError", message: /outside the profile project allowlist/ },
     "application search must retain the final project allowlist defense",
   );
   await assert.rejects(
-    () => outOfScopeApplication.exportTicketSearch("demo", { preset: "all" }, "plan", "metadata"),
+    () => outOfScopeApplication.exportTicketSearch("demo", { scope: "project", state: "all" }, "plan", "metadata"),
     { name: "TicketError", message: /outside the profile project allowlist/ },
     "query export must retain the same final project allowlist defense while enumerating pages",
   );
@@ -457,15 +458,14 @@ try {
     },
   };
   const detailFailureApplication = createApplication(config, detailFailureProvider, queryBundleStore);
-  const frozenQueryPlan = await detailFailureApplication.exportTicketSearch("demo", { preset: "all" }, "plan", "metadata");
+  const frozenQueryPlan = await detailFailureApplication.exportTicketSearch("demo", { scope: "project", state: "all" }, "plan", "metadata");
   assert.equal(frozenQueryPlan.selectedCount, 2);
   rejectSecondDetail = true;
-  await assert.rejects(
-    () => detailFailureApplication.exportTicketSearch("demo", { preset: "all" }, "write", "metadata", frozenQueryPlan.selection),
-    /second query detail failed/,
-    "a failed detail read must reject query write before any bundle write begins",
-  );
-  assert.equal(queryWriteSessions, 0, "query writes must not begin until every selected detail has been read successfully");
+  const partialQueryWrite = await detailFailureApplication.exportTicketSearch("demo", { scope: "project", state: "all" }, "write", "metadata", frozenQueryPlan.selection);
+  assert.equal(partialQueryWrite.complete, false, "streamed query writes must report an incomplete batch instead of hiding completed work");
+  assert.equal(partialQueryWrite.completedCount, 1);
+  assert.deepEqual(partialQueryWrite.failedTickets, [{ ticketId: "query-task-2", code: "UNEXPECTED", message: "Ticket export failed unexpectedly" }]);
+  assert.equal(queryWriteSessions, 1, "a streamed query write must write completed tickets without keeping later details in memory");
 
   const plan = await application.exportTicket("demo", { id: "task-1" }, "plan", "metadata");
   assert.equal(plan.action, "created");
@@ -527,6 +527,25 @@ try {
   });
   const mediaPlan = await mediaApplication.exportTicket("demo", { id: "task-1" }, "plan");
   assert.ok(mediaPlan.files.some((file) => file.path === "assets/description/attachment-1-a.png"));
+  assert.equal(mediaPlan.budget.plannedMedia.plannedCount, 1);
+  assert.equal(mediaPlan.budget.plannedMedia.knownBytes, 12);
+  const constrainedApplication = new TicketApplication({
+    profiles: new StaticTicketProfileResolver([{ name: "demo", providerId: "ones", connector: "graphql", allowedProjects: ["project-demo"], inlineMaxChars: 12_000 }]),
+    provider: new FakeProvider(),
+    bundleStore: new LocalTicketBundleStore(join(root, "constrained-export")),
+    redaction: config.storage.redaction,
+    exportLimits: { maxAttachmentBytes: 10, maxTotalBytes: 10 },
+  });
+  await assert.rejects(() => constrainedApplication.exportTicket("demo", { id: "task-1" }, "plan"), (error: unknown) => error instanceof TicketError && error.code === "EXPORT_LIMIT_EXCEEDED");
+  const actualBytesApplication = new TicketApplication({
+    profiles: new StaticTicketProfileResolver([{ name: "demo", providerId: "ones", connector: "graphql", allowedProjects: ["project-demo"], inlineMaxChars: 12_000 }]),
+    provider: new FakeProvider(),
+    bundleStore: new LocalTicketBundleStore(join(root, "actual-bytes-limit")),
+    redaction: config.storage.redaction,
+    exportLimits: { maxAttachmentBytes: 12, maxTotalBytes: 12 },
+    mediaProvider: { async downloadAttachment(_profile, attachment, options) { assert.equal(options?.maxBytes, 12); return { attachment, bytes: new Uint8Array(13), contentType: "image/png" }; } },
+  });
+  await assert.rejects(() => actualBytesApplication.exportTicket("demo", { id: "task-1" }, "write"), (error: unknown) => error instanceof TicketError && error.code === "EXPORT_LIMIT_EXCEEDED");
   const mediaWrite = await mediaApplication.exportTicket("demo", { id: "task-1" }, "write");
   assert.ok("status" in mediaWrite);
   assert.equal(mediaDownloadCount, 1);
@@ -590,6 +609,14 @@ try {
     async search() { return { items: [{ id: "task-1", title: "示例技术改造", projectId: "project-demo" }], page: { returned: 1, totalCount: 1, hasNextPage: false } }; },
     async getTicket() { return sequentialTicket; },
   };
+  const totalBudgetApplication = new TicketApplication({
+    profiles: new StaticTicketProfileResolver([{ name: "demo", providerId: "ones", connector: "graphql", allowedProjects: ["project-demo"], inlineMaxChars: 12_000 }]),
+    provider: sequentialProvider,
+    bundleStore: new LocalTicketBundleStore(join(root, "total-media-limit")),
+    redaction: config.storage.redaction,
+    exportLimits: { maxAttachmentBytes: 12, maxTotalBytes: 13 },
+  });
+  await assert.rejects(() => totalBudgetApplication.exportTicket("demo", { id: "task-1" }, "plan"), (error: unknown) => error instanceof TicketError && error.code === "EXPORT_LIMIT_EXCEEDED");
   const sequentialApplication = new TicketApplication({
     profiles: new StaticTicketProfileResolver([{ name: "demo", providerId: "ones", connector: "graphql", allowedProjects: ["project-demo"], inlineMaxChars: 12_000 }]),
     provider: sequentialProvider,
@@ -638,7 +665,8 @@ try {
   const http = new RecordingHttpClient();
   const graphql = new OnesGraphqlSource(config, new StaticSecretProvider(), http);
   const graphSearchQuery: TicketSearchQuery = {
-    preset: "my_open",
+    scope: "self",
+    state: "open",
     filter: { all: [{ field: "statusCategory", op: "notIn", values: ["done"] }, { field: "assignee", op: "in", values: ["me"] }] },
     sort: { field: "createTime", direction: "desc" },
     page: { size: 50 },
@@ -651,7 +679,7 @@ try {
   assert.deepEqual(
     compileOnesTicketSearchVariables(profileWithoutProjectConstraint, graphSearchQuery),
     myOpenFixture.variables,
-    "my_open compilation must match the archived real ONES request variables when no profile project constraint is added",
+    "self/open compilation must match the archived real ONES request variables when no profile project constraint is added",
   );
   const lazyLoadFixture = await readFixture("ones-items-graphql-lazy-load-after-status-not-in-assignee-not-in-me.request.json");
   const lazyPagination = lazyLoadFixture.variables.pagination as { limit: number; after: string; preciseCount?: unknown };
@@ -698,7 +726,8 @@ try {
   );
 
   const searchQuery: TicketSearchQuery = {
-    preset: "my_active",
+    scope: "self",
+    state: "active",
     filter: {
       all: [
         { field: "title", op: "contains", value: "111" },

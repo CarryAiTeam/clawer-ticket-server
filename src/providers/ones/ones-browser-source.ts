@@ -3,7 +3,7 @@ import { chromium, Browser, BrowserContext, Page } from "playwright-core";
 import { OnesConfig, OnesProfile } from "./ones-config.js";
 import { TicketAttachment } from "../../modules/tickets/domain/ticket.js";
 import { TicketError as OnesError } from "../../modules/tickets/domain/ticket-error.js";
-import { BrowserSessionProvider, ConnectionStatus, TicketMediaDownload, TicketProfile } from "../../modules/tickets/domain/ports.js";
+import { BrowserSessionProvider, ConnectionStatus, TicketMediaDownload, TicketMediaDownloadOptions, TicketProfile } from "../../modules/tickets/domain/ports.js";
 import { HttpResponse, parseJsonResponse } from "../../infrastructure/http/fetch-http-client.js";
 import { OnesGraphqlSource, myOpenTicketSearchQuery } from "./ones-graphql-source.js";
 
@@ -127,24 +127,53 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
   }
 
   /** 使用可见浏览器的内存认证上下文；不读取或持久化 Cookie。 */
-  override async downloadAttachment(ticketProfile: TicketProfile, attachment: TicketAttachment): Promise<TicketMediaDownload> {
+  override async downloadAttachment(ticketProfile: TicketProfile, attachment: TicketAttachment, options?: TicketMediaDownloadOptions): Promise<TicketMediaDownload> {
     const profile = this.profileFor(ticketProfile);
-    if (profile.source !== "browser") return super.downloadAttachment(ticketProfile, attachment);
+    if (profile.source !== "browser") return super.downloadAttachment(ticketProfile, attachment, options);
     const url = await this.resolveAttachmentUrl(profile, attachment.id);
     return this.withRequestSlot(profile, () => this.retryRateLimited(profile, async () => {
       await this.acquireBudget(profile);
       const page = this.requireActivePage(profile);
-      const encoded = await page.evaluate(async (value) => {
+      const encoded = await page.evaluate(async ({ value, maxBytes }) => {
         const response = await fetch(value, { credentials: "include" });
         if (!response.ok) return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: "" };
-        const bytes = new Uint8Array(await response.arrayBuffer());
+        const declaredSize = Number(response.headers.get("content-length"));
+        if (maxBytes !== undefined && Number.isSafeInteger(declaredSize) && declaredSize > maxBytes) {
+          return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: "", tooLarge: true };
+        }
+        const reader = response.body?.getReader();
+        if (!reader) return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: "" };
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        try {
+          for (;;) {
+            const next = await reader.read();
+            if (next.done) break;
+            const candidate = total + next.value.byteLength;
+            if (maxBytes !== undefined && (!Number.isSafeInteger(candidate) || candidate > maxBytes)) {
+              await reader.cancel();
+              return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: "", tooLarge: true };
+            }
+            total = candidate;
+            chunks.push(next.value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        const bytes = new Uint8Array(total);
+        let byteOffset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, byteOffset);
+          byteOffset += chunk.byteLength;
+        }
         let binary = "";
         for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
         return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: btoa(binary) };
-      }, url.toString()) as { status: number; contentType: string; retryAfter?: string; base64: string };
+      }, { value: url.toString(), maxBytes: options?.maxBytes }) as { status: number; contentType: string; retryAfter?: string; base64: string; tooLarge?: boolean };
       if (encoded.status === 401 || encoded.status === 403) throw new OnesError("HUMAN_ACTION_REQUIRED", "ONES requires an authenticated visible browser session for attachment download");
       if (encoded.status === 429) throw this.rateLimited("attachment download was rate limited", encoded.retryAfter ?? null);
       if (encoded.status < 200 || encoded.status >= 300) throw new OnesError("SOURCE_FAILED", `attachment download returned ${encoded.status}`);
+      if (encoded.tooLarge) throw new OnesError("EXPORT_LIMIT_EXCEEDED", `attachment download exceeds the configured per-file limit of ${options?.maxBytes ?? 0} bytes`);
       return { attachment, bytes: Uint8Array.from(Buffer.from(encoded.base64, "base64")), ...(encoded.contentType ? { contentType: encoded.contentType } : {}) };
     }));
   }

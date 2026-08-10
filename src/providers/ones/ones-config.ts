@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import * as z from "zod/v4";
 import { TicketClass } from "../../modules/tickets/domain/ticket.js";
 import { TicketError } from "../../modules/tickets/domain/ticket-error.js";
+import { DEFAULT_TICKET_EXPORT_LIMITS } from "../../modules/tickets/domain/ticket-export.js";
 
 const classificationRuleSchema = z.object({
   name: z.string().min(1),
@@ -53,6 +54,18 @@ const profileSchema = z.object({
   }
 });
 
+const exportLimitsSchema = z.object({
+  /** 查询型导出默认只允许小批量；更大的范围应由调用方拆分。 */
+  maxItems: z.number().int().min(1).max(10_000).default(DEFAULT_TICKET_EXPORT_LIMITS.maxItems),
+  maxAttachments: z.number().int().min(1).max(100_000).default(DEFAULT_TICKET_EXPORT_LIMITS.maxAttachments),
+  maxAttachmentBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_TICKET_EXPORT_LIMITS.maxAttachmentBytes),
+  maxTotalBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_TICKET_EXPORT_LIMITS.maxTotalBytes),
+}).strict().superRefine((limits, context) => {
+  if (limits.maxAttachmentBytes > limits.maxTotalBytes) {
+    context.addIssue({ code: "custom", path: ["maxAttachmentBytes"], message: "maxAttachmentBytes cannot exceed maxTotalBytes" });
+  }
+});
+
 const configSchema = z.object({
   schemaVersion: z.literal("1.0"),
   storage: z.object({
@@ -61,6 +74,7 @@ const configSchema = z.object({
     redaction: z
       .object({ omitPeople: z.boolean().default(false), removeFields: z.array(z.string()).default(["phone", "email"]) })
       .default({ omitPeople: false, removeFields: ["phone", "email"] }),
+    exportLimits: exportLimitsSchema.default({ ...DEFAULT_TICKET_EXPORT_LIMITS }),
   }).strict(),
   profiles: z.record(z.string().min(1), profileSchema).refine((profiles) => Object.keys(profiles).length > 0, "At least one profile is required"),
 }).strict();

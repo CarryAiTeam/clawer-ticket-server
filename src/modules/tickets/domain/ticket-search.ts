@@ -2,14 +2,17 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import {
   TicketFilter,
   TicketSearchInput,
-  TicketSearchPreset,
   TicketSearchQuery,
   TicketSearchSelection,
+  TicketSearchScope,
+  TicketSearchState,
   TicketStatusCategory,
 } from "./ticket.js";
 import { TicketError } from "./ticket-error.js";
 
 const STATUS_CATEGORIES: readonly TicketStatusCategory[] = ["to_do", "in_progress", "done"];
+const SEARCH_SCOPES: readonly TicketSearchScope[] = ["self", "project"];
+const SEARCH_STATES: readonly TicketSearchState[] = ["open", "active", "done", "all"];
 const MAX_FILTERS = 16;
 const MAX_PAGE_SIZE = 50;
 const DEFAULT_PAGE_SIZE = 20;
@@ -84,16 +87,18 @@ function orderedStatusCategories(values: ReadonlySet<string>): TicketStatusCateg
 }
 
 /**
- * 解析 MCP 公开输入并将 preset 与一层 AND 条件规范化。此函数不依赖 provider，
+ * 解析 MCP 公开输入并将范围、状态与一层 AND 条件规范化。此函数不依赖 provider，
  * 因而 provider-specific GraphQL、view 或 raw after 参数不会越过领域边界。
  */
 export function normalizeTicketSearchInput(value: TicketSearchInput | unknown): NormalizedTicketSearchInput {
   const input = record(value, "ticket_search input");
-  onlyKeys(input, ["profile", "preset", "where", "page"], "ticket_search input");
+  onlyKeys(input, ["profile", "scope", "state", "where", "page"], "ticket_search input");
 
   const profile = input.profile === undefined ? undefined : nonEmptyString(input.profile, "profile", 128);
-  const preset = input.preset === undefined ? "my_open" : input.preset;
-  if (preset !== "my_open" && preset !== "my_active" && preset !== "all") invalid("preset must be my_open, my_active, or all");
+  const scope = input.scope === undefined ? "self" : input.scope;
+  if (!SEARCH_SCOPES.includes(scope as TicketSearchScope)) invalid("scope must be self or project");
+  const state = input.state === undefined ? "open" : input.state;
+  if (!SEARCH_STATES.includes(state as TicketSearchState)) invalid("state must be open, active, done, or all");
 
   let cursor: string | undefined;
   let pageSize = DEFAULT_PAGE_SIZE;
@@ -114,7 +119,8 @@ export function normalizeTicketSearchInput(value: TicketSearchInput | unknown): 
   let statusIn: Set<string> | undefined;
   let hasStatusIn = false;
   const statusNotIn = new Set<string>();
-  let hasAssignee = false;
+  let hasAssignee = scope === "self";
+  let hasExplicitAssignee = false;
 
   const applyFilter = (filter: TicketFilter) => {
     switch (filter.field) {
@@ -135,18 +141,20 @@ export function normalizeTicketSearchInput(value: TicketSearchInput | unknown): 
         }
         return;
       case "assignee":
+        hasExplicitAssignee = true;
         hasAssignee = true;
         return;
     }
   };
 
-  if (preset === "my_open") {
+  if (state === "open") {
     statusNotIn.add("done");
-    hasAssignee = true;
-  } else if (preset === "my_active") {
+  } else if (state === "active") {
     hasStatusIn = true;
     statusIn = new Set(["to_do", "in_progress"]);
-    hasAssignee = true;
+  } else if (state === "done") {
+    hasStatusIn = true;
+    statusIn = new Set(["done"]);
   }
 
   if (input.where !== undefined) {
@@ -184,6 +192,7 @@ export function normalizeTicketSearchInput(value: TicketSearchInput | unknown): 
 
   if (titles.size > 1) invalid("title may appear only once in a v1 search");
   if (issueTypes && issueTypes.size === 0) invalid("issueType filters do not overlap");
+  if (scope === "project" && hasExplicitAssignee) invalid("assignee may be used only with scope self");
 
   if (statusIn) {
     for (const category of statusNotIn) statusIn.delete(category);
@@ -209,7 +218,8 @@ export function normalizeTicketSearchInput(value: TicketSearchInput | unknown): 
     ...(profile ? { profile } : {}),
     ...(cursor ? { cursor } : {}),
     query: {
-      preset,
+      scope: scope as TicketSearchScope,
+      state: state as TicketSearchState,
       filter: { all: filters },
       sort: { field: "createTime", direction: "desc" },
       page: { size: pageSize },
@@ -217,10 +227,10 @@ export function normalizeTicketSearchInput(value: TicketSearchInput | unknown): 
   };
 }
 
-/** 同一 profile、预设、条件和固定排序始终产生同一 fingerprint。 */
-export function ticketSearchFingerprint(profile: string, query: Pick<TicketSearchQuery, "preset" | "filter" | "sort">): string {
+/** 同一 profile、范围、状态、条件和固定排序始终产生同一 fingerprint。 */
+export function ticketSearchFingerprint(profile: string, query: Pick<TicketSearchQuery, "scope" | "state" | "filter" | "sort">): string {
   return createHash("sha256")
-    .update(JSON.stringify({ version: 1, profile, preset: query.preset, filter: query.filter, sort: query.sort }))
+    .update(JSON.stringify({ version: 1, profile, scope: query.scope, state: query.state, filter: query.filter, sort: query.sort }))
     .digest("hex");
 }
 

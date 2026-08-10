@@ -10,7 +10,18 @@ import {
   TicketSearchSelection,
   TicketSummary,
 } from "../domain/ticket.js";
-import { TicketError } from "../domain/ticket-error.js";
+import { TicketError, TicketErrorCode } from "../domain/ticket-error.js";
+import {
+  assertDownloadedBytes,
+  assertMediaSummaryWithinLimits,
+  assertMediaWithinLimits,
+  mergeMediaSummaries,
+  normalizeTicketExportLimits,
+  TicketExportBudgetReport,
+  TicketExportLimits,
+  TicketExportMediaSummary,
+  TicketSearchExportBudgetReport,
+} from "../domain/ticket-export.js";
 import { BrowserSessionProvider, ExportPlan, ExportResult, TicketBundleStore, TicketMediaMode, TicketMediaPlan, TicketMediaProvider, TicketProfile, TicketProfileResolver, TicketProvider } from "../domain/ports.js";
 import { redactTicket, redactTicketSummary, TicketRedactionPolicy } from "../domain/ticket-policy.js";
 import {
@@ -30,26 +41,52 @@ export interface TicketApplicationDependencies {
   mediaProvider?: TicketMediaProvider;
   /** 可注入以便验证 cursor 过期等纯应用层行为；默认只保存在当前服务进程。 */
   cursorStore?: TicketSearchCursorStore;
-  /** 查询型导出防止意外枚举无限结果集的受控上限。 */
-  maxSearchExportItems?: number;
+  /** 本地导出数量与媒体大小的服务端硬预算。 */
+  exportLimits?: Partial<TicketExportLimits>;
+}
+
+export type TicketExportArtifact = (ExportPlan | ExportResult) & { budget: TicketExportBudgetReport };
+
+export interface TicketSearchExportFailure {
+  ticketId: string;
+  code: TicketErrorCode | "UNEXPECTED";
+  message: string;
 }
 
 export interface TicketSearchExportResult {
   query: TicketSearchResult["query"];
   selection: TicketSearchSelection;
   selectedCount: number;
-  complete: true;
-  exports: Array<ExportPlan | ExportResult>;
+  completedCount: number;
+  complete: boolean;
+  exports: TicketExportArtifact[];
+  failedTickets: TicketSearchExportFailure[];
+  budget: TicketSearchExportBudgetReport;
+}
+
+interface MutableExportUsage {
+  attachmentCount: number;
+  plannedMedia: TicketExportMediaSummary;
+  downloadedBytes: number;
+}
+
+function emptyMediaSummary(): TicketExportMediaSummary {
+  return { plannedCount: 0, knownBytes: 0, unknownSizeCount: 0 };
+}
+
+function exportFailure(ticketId: string, error: unknown): TicketSearchExportFailure {
+  if (error instanceof TicketError) return { ticketId, code: error.code, message: error.message };
+  return { ticketId, code: "UNEXPECTED", message: "Ticket export failed unexpectedly" };
 }
 
 export class TicketApplication {
   private readonly cursors: TicketSearchCursorStore;
-  private readonly maxSearchExportItems: number;
+  private readonly exportLimits: TicketExportLimits;
 
   /** 保存由组合根注入的 profile、provider、存储与安全策略依赖。 */
   constructor(private readonly dependencies: TicketApplicationDependencies) {
     this.cursors = dependencies.cursorStore ?? new TicketSearchCursorStore();
-    this.maxSearchExportItems = dependencies.maxSearchExportItems ?? 10_000;
+    this.exportLimits = normalizeTicketExportLimits(dependencies.exportLimits);
   }
 
   /** 查询 profile 的连接状态，并返回受控的 provider 与项目范围信息。 */
@@ -102,7 +139,8 @@ export class TicketApplication {
       : undefined;
     return {
       query: {
-        preset: query.preset,
+        scope: query.scope,
+        state: query.state,
         normalizedFilter: query.filter,
         fingerprint: resolved.fingerprint,
       },
@@ -135,7 +173,7 @@ export class TicketApplication {
   }
 
   /** 为单张工单生成导出计划或显式写入本地 bundle；默认下载媒体，metadata 可关闭下载。 */
-  async exportTicket(profile: string | undefined, reference: TicketReference, mode: "plan" | "write", mediaMode: TicketMediaMode = "download"): Promise<ExportPlan | ExportResult> {
+  async exportTicket(profile: string | undefined, reference: TicketReference, mode: "plan" | "write", mediaMode: TicketMediaMode = "download"): Promise<TicketExportArtifact> {
     const ticket = await this.getTicket(profile, reference);
     return this.exportLoadedTicket(profile, ticket, mode, mediaMode);
   }
@@ -170,50 +208,121 @@ export class TicketApplication {
         throw new TicketError("SELECTION_CHANGED", "The query selection changed after plan; run ticket_export with mode plan again before writing");
       }
     }
-    // 详情读取是查询型导出的最后一道完整性闸门：任一详情失败时尚未开始本地写入。
-    const tickets: CanonicalTicket[] = [];
+    // 每张详情只在处理该张导出时保留，避免大查询把完整工单全文全部驻留内存。
+    const exports: TicketExportArtifact[] = [];
+    const failedTickets: TicketSearchExportFailure[] = [];
+    const usage = this.emptyExportUsage();
     for (const item of summaries) {
-      tickets.push(await this.getTicket(resolved.profile.name, { id: item.id }));
-    }
-    const exports: Array<ExportPlan | ExportResult> = [];
-    for (const ticket of tickets) {
-      exports.push(await this.exportLoadedTicket(resolved.profile.name, ticket, mode, mediaMode));
+      try {
+        const ticket = await this.getTicket(resolved.profile.name, { id: item.id });
+        exports.push(await this.exportLoadedTicket(resolved.profile.name, ticket, mode, mediaMode, usage));
+      } catch (error) {
+        // plan 是确认前的完整性闸门，不能把不完整计划交给调用方确认。
+        if (mode === "plan") throw error;
+        // write 已有前项落盘时，返回每一项的稳定失败结果；重新 plan 后可借助幂等 bundle 继续。
+        failedTickets.push(exportFailure(item.id, error));
+      }
     }
     return {
-      query: { preset: resolved.query.preset, normalizedFilter: resolved.query.filter, fingerprint: resolved.fingerprint },
+      query: {
+        scope: resolved.query.scope,
+        state: resolved.query.state,
+        normalizedFilter: resolved.query.filter,
+        fingerprint: resolved.fingerprint,
+      },
       selection: frozenSelection,
       selectedCount: summaries.length,
-      complete: true,
+      completedCount: exports.length,
+      complete: failedTickets.length === 0,
       exports,
+      failedTickets,
+      budget: this.exportUsageReport(mediaMode, usage),
     };
   }
 
   /** 复用单项导出的完整详情和受控媒体写入逻辑。 */
-  private async exportLoadedTicket(profile: string | undefined, ticket: CanonicalTicket, mode: "plan" | "write", mediaMode: TicketMediaMode): Promise<ExportPlan | ExportResult> {
+  private async exportLoadedTicket(
+    profile: string | undefined,
+    ticket: CanonicalTicket,
+    mode: "plan" | "write",
+    mediaMode: TicketMediaMode,
+    usage?: MutableExportUsage,
+  ): Promise<TicketExportArtifact> {
     const media = mediaMode === "download" ? this.mediaPlan(ticket) : [];
-    if (mode === "plan") return this.dependencies.bundleStore.plan(ticket, media);
-    return this.downloadMissingMedia(profile, ticket, media);
+    const mediaSummary = mediaMode === "download"
+      ? assertMediaWithinLimits(media, this.exportLimits)
+      : emptyMediaSummary();
+    const candidate = {
+      attachmentCount: (usage?.attachmentCount ?? 0) + ticket.attachments.length,
+      plannedMedia: mergeMediaSummaries(usage?.plannedMedia ?? emptyMediaSummary(), mediaSummary),
+      downloadedBytes: usage?.downloadedBytes ?? 0,
+    };
+    if (mediaMode === "download") assertMediaSummaryWithinLimits(candidate.plannedMedia, this.exportLimits);
+    if (mode === "plan") {
+      const plan = await this.dependencies.bundleStore.plan(ticket, media);
+      if (usage) this.commitExportUsage(usage, candidate);
+      return { ...plan, budget: this.ticketBudgetReport(mediaMode, candidate) };
+    }
+    const written = await this.downloadMissingMedia(profile, ticket, media, candidate.downloadedBytes);
+    const completed = { ...candidate, downloadedBytes: written.downloadedBytes };
+    if (usage) this.commitExportUsage(usage, completed);
+    return { ...written.result, budget: this.ticketBudgetReport(mediaMode, completed) };
   }
 
   /** 已验证媒体只暂存一次；仅将缺失文件下载到同一原子导出会话。 */
-  private async downloadMissingMedia(profile: string | undefined, ticket: CanonicalTicket, media: TicketMediaPlan[]): Promise<ExportResult> {
+  private async downloadMissingMedia(
+    profile: string | undefined,
+    ticket: CanonicalTicket,
+    media: TicketMediaPlan[],
+    alreadyDownloadedBytes: number,
+  ): Promise<{ result: ExportResult; downloadedBytes: number }> {
     const session = await this.dependencies.bundleStore.beginExport(ticket, media);
     const selectedProfile = this.profile(profile);
+    let downloadedBytes = alreadyDownloadedBytes;
     try {
       for (const item of session.missingMedia) {
-        await session.writeMedia(item, await this.mediaProvider().downloadAttachment(selectedProfile, item.attachment));
+        const download = await this.mediaProvider().downloadAttachment(selectedProfile, item.attachment, { maxBytes: this.exportLimits.maxAttachmentBytes });
+        downloadedBytes = assertDownloadedBytes(download.bytes, item.attachment, downloadedBytes, this.exportLimits);
+        await session.writeMedia(item, download);
       }
-      return await session.commit();
+      return { result: await session.commit(), downloadedBytes };
     } catch (error) {
       await session.abort();
       throw error;
     }
   }
 
+  private emptyExportUsage(): MutableExportUsage {
+    return { attachmentCount: 0, plannedMedia: emptyMediaSummary(), downloadedBytes: 0 };
+  }
+
+  private commitExportUsage(target: MutableExportUsage, value: MutableExportUsage): void {
+    target.attachmentCount = value.attachmentCount;
+    target.plannedMedia = value.plannedMedia;
+    target.downloadedBytes = value.downloadedBytes;
+  }
+
+  private ticketBudgetReport(mediaMode: TicketMediaMode, usage: MutableExportUsage): TicketExportBudgetReport {
+    return {
+      mediaMode,
+      attachmentCount: usage.attachmentCount,
+      plannedMedia: usage.plannedMedia,
+      downloadedBytes: usage.downloadedBytes,
+      limits: { ...this.exportLimits },
+    };
+  }
+
+  private exportUsageReport(mediaMode: TicketMediaMode, usage: MutableExportUsage): TicketSearchExportBudgetReport {
+    return this.ticketBudgetReport(mediaMode, usage);
+  }
+
   /** 先在应用层规范化查询，再把 profile 和 page size 绑定到公共 cursor。 */
   private resolveSearch(input: TicketSearchInput) {
     const normalized = normalizeTicketSearchInput(input);
     const profile = this.profile(normalized.profile);
+    if (normalized.query.scope === "project" && profile.allowedProjects.length === 0) {
+      throw new TicketError("SOURCE_NOT_ALLOWED", "Project-scope search requires a non-empty profile project allowlist");
+    }
     const fingerprint = ticketSearchFingerprint(profile.name, normalized.query);
     return { profile, query: normalized.query, fingerprint, cursor: normalized.cursor };
   }
@@ -272,16 +381,16 @@ export class TicketApplication {
       else if (expectedTotal !== page.totalCount) {
         throw new TicketError("SOURCE_INCOMPLETE", "Ticket search total changed while preparing the export selection");
       }
-      if (page.totalCount > this.maxSearchExportItems) {
-        throw new TicketError("SOURCE_INCOMPLETE", `Ticket search matches more than the configured export limit of ${this.maxSearchExportItems}`);
+      if (page.totalCount > this.exportLimits.maxItems) {
+        throw new TicketError("EXPORT_LIMIT_EXCEEDED", `Ticket search matches more than the configured export limit of ${this.exportLimits.maxItems} items`);
       }
       for (const item of response.items) {
         if (ids.has(item.id)) throw new TicketError("SOURCE_SCHEMA_CHANGED", "Ticket search provider returned a duplicate item across pages");
         ids.add(item.id);
         summaries.push(item);
       }
-      if (summaries.length > this.maxSearchExportItems) {
-        throw new TicketError("SOURCE_INCOMPLETE", `Ticket search exceeds the configured export limit of ${this.maxSearchExportItems}`);
+      if (summaries.length > this.exportLimits.maxItems) {
+        throw new TicketError("EXPORT_LIMIT_EXCEEDED", `Ticket search exceeds the configured export limit of ${this.exportLimits.maxItems} items`);
       }
       if (!page.hasNextPage) {
         if (summaries.length !== page.totalCount) {

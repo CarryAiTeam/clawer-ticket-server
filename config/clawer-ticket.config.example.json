@@ -6,6 +6,12 @@
     "redaction": {
       "omitPeople": false,
       "removeFields": ["phone", "email"]
+    },
+    "exportLimits": {
+      "maxItems": 50,
+      "maxAttachments": 500,
+      "maxAttachmentBytes": 52428800,
+      "maxTotalBytes": 536870912
     }
   },
   "profiles": {

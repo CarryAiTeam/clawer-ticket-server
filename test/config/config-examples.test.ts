@@ -21,6 +21,12 @@ assert.equal(browserProfile.requestBudget.maxRequestsPerMinute, 20);
 assert.equal(browserProfile.browser?.autoLogin?.email, "replace-with-local-login@example.com");
 assert.equal(browserProfile.browser?.autoLogin?.password, "REPLACE_WITH_LOCAL_PASSWORD");
 assert.equal("listAssigneeFieldId" in browserProfile, false);
+assert.deepEqual(browserExample.storage.exportLimits, {
+  maxItems: 50,
+  maxAttachments: 500,
+  maxAttachmentBytes: 50 * 1024 * 1024,
+  maxTotalBytes: 512 * 1024 * 1024,
+});
 
 const referenceExample = parseConfig(JSON.parse(await readFile(new URL("../../config/clawer-ticket.config.example.json", import.meta.url), "utf8")) as unknown);
 const referenceGraphql = referenceExample.profiles["ones-graphql-my-open"]!;

@@ -106,8 +106,11 @@ export interface InlineTicket extends CanonicalTicket {
   };
 }
 
-/** 首版公共搜索预设；all 必须由调用方显式选择。 */
-export type TicketSearchPreset = "my_open" | "my_active" | "all";
+/** 查询数据范围；默认只查询当前用户负责的工单。 */
+export type TicketSearchScope = "self" | "project";
+
+/** 查询状态范围；默认排除已完成工单。 */
+export type TicketSearchState = "open" | "active" | "done" | "all";
 
 /** 首版只允许由服务端编译的平铺 AND 条件，绝不接收 provider 原始筛选表达式。 */
 export type TicketFilter =
@@ -121,14 +124,16 @@ export type TicketStatusCategory = "to_do" | "in_progress" | "done";
 /** MCP 公开搜索输入；profile 仍由受控本地配置解析。 */
 export interface TicketSearchInput {
   profile?: string;
-  preset?: TicketSearchPreset;
+  scope?: TicketSearchScope;
+  state?: TicketSearchState;
   where?: { all: TicketFilter[] };
   page?: { size?: number; cursor?: string };
 }
 
 /** 应用层已验证的 provider-neutral 查询，不含公开 cursor 或 ONES variables。 */
 export interface TicketSearchQuery {
-  preset: TicketSearchPreset;
+  scope: TicketSearchScope;
+  state: TicketSearchState;
   filter: { all: TicketFilter[] };
   sort: { field: "createTime"; direction: "desc" };
   page: { size: number; after?: string };
@@ -161,7 +166,8 @@ export interface TicketSearchProviderResult {
 /** ticket_search 的稳定、对外结果；nextCursor 始终由本服务签发。 */
 export interface TicketSearchResult {
   query: {
-    preset: TicketSearchPreset;
+    scope: TicketSearchScope;
+    state: TicketSearchState;
     normalizedFilter: { all: TicketFilter[] };
     fingerprint: string;
   };

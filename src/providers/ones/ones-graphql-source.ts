@@ -2,7 +2,7 @@ import { getProfile, OnesConfig, OnesProfile } from "./ones-config.js";
 import { HttpClient, FetchHttpClient, parseJsonResponse } from "../../infrastructure/http/fetch-http-client.js";
 import { CanonicalTicket, TicketAttachment, TicketReference, TicketSearchProviderResult, TicketSearchQuery, TicketSummary } from "../../modules/tickets/domain/ticket.js";
 import { TicketError as OnesError } from "../../modules/tickets/domain/ticket-error.js";
-import { ConnectionStatus, TicketMediaDownload, TicketMediaProvider, TicketProfile, TicketProvider } from "../../modules/tickets/domain/ports.js";
+import { ConnectionStatus, TicketMediaDownload, TicketMediaDownloadOptions, TicketMediaProvider, TicketProfile, TicketProvider } from "../../modules/tickets/domain/ports.js";
 import { SecretProvider, EnvSecretProvider } from "../../infrastructure/security/env-secret-provider.js";
 import { normalizeOnesTicket } from "./ones-ticket-mapper.js";
 import { OnesRawTicketData } from "./ones-contracts.js";
@@ -75,7 +75,8 @@ function stringValue(value: unknown): string | undefined {
 /** 连接状态只需执行一个最小的受控搜索，不再依赖旧的树形待办查询。 */
 export function myOpenTicketSearchQuery(size: number): TicketSearchQuery {
   return {
-    preset: "my_open",
+    scope: "self",
+    state: "open",
     filter: {
       all: [
         { field: "statusCategory", op: "notIn", values: ["done"] },
@@ -131,6 +132,47 @@ function retryAfterMilliseconds(value: string | null, now: number): number | und
   if (Number.isFinite(seconds) && seconds >= 0) return Math.min(Math.round(seconds * 1_000), 60_000);
   const date = Date.parse(value);
   return Number.isFinite(date) ? Math.min(Math.max(date - now, 0), 60_000) : undefined;
+}
+
+/** 有上限地读取媒体响应，避免未知 Content-Length 走 arrayBuffer 时无界累积。 */
+async function readAttachmentBytes(response: Response, maxBytes?: number): Promise<Uint8Array> {
+  const declaredSize = Number(response.headers.get("content-length"));
+  if (maxBytes !== undefined && Number.isSafeInteger(declaredSize) && declaredSize > maxBytes) {
+    throw new OnesError("EXPORT_LIMIT_EXCEEDED", `attachment download exceeds the configured per-file limit of ${maxBytes} bytes`);
+  }
+  if (maxBytes === undefined || !response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (maxBytes !== undefined && bytes.byteLength > maxBytes) {
+      throw new OnesError("EXPORT_LIMIT_EXCEEDED", `attachment download exceeds the configured per-file limit of ${maxBytes} bytes`);
+    }
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      const chunk = next.value;
+      const candidate = total + chunk.byteLength;
+      if (!Number.isSafeInteger(candidate) || candidate > maxBytes) {
+        await reader.cancel();
+        throw new OnesError("EXPORT_LIMIT_EXCEEDED", `attachment download exceeds the configured per-file limit of ${maxBytes} bytes`);
+      }
+      total = candidate;
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
@@ -211,10 +253,10 @@ export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
   }
 
   /** 将 ONES 附件 UUID 解析为短时 URL，并立即读取其字节内容。 */
-  async downloadAttachment(ticketProfile: TicketProfile, attachment: TicketAttachment): Promise<TicketMediaDownload> {
+  async downloadAttachment(ticketProfile: TicketProfile, attachment: TicketAttachment, options?: TicketMediaDownloadOptions): Promise<TicketMediaDownload> {
     const profile = this.profileFor(ticketProfile);
     const url = await this.resolveAttachmentUrl(profile, attachment.id);
-    return this.downloadResolvedAttachment(profile, attachment, url);
+    return this.downloadResolvedAttachment(profile, attachment, url, options);
   }
 
   /** 临时 URL 仅保留在内存中，绝不写入 CanonicalTicket。 */
@@ -228,7 +270,7 @@ export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
     return url;
   }
 
-  protected async downloadResolvedAttachment(profile: OnesProfile, attachment: TicketAttachment, url: URL): Promise<TicketMediaDownload> {
+  protected async downloadResolvedAttachment(profile: OnesProfile, attachment: TicketAttachment, url: URL, options?: TicketMediaDownloadOptions): Promise<TicketMediaDownload> {
     return this.withRequestSlot(profile, () => this.retryRateLimited(profile, async () => {
       await this.acquireBudget(profile);
       const token = await this.resolveToken(profile);
@@ -238,7 +280,8 @@ export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
       if (response.status === 429) throw new OnesRateLimitError("attachment download was rate limited", retryAfterMilliseconds(response.headers.get("retry-after"), this.now()));
       if (!response.ok) throw new OnesError("SOURCE_FAILED", `attachment download returned ${response.status}`);
       const contentType = response.headers.get("content-type") ?? undefined;
-      return { attachment, bytes: new Uint8Array(await response.arrayBuffer()), ...(contentType ? { contentType } : {}) };
+      const bytes = await readAttachmentBytes(response, options?.maxBytes);
+      return { attachment, bytes, ...(contentType ? { contentType } : {}) };
     }));
   }
 
