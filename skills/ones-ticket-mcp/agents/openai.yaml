@@ -1,0 +1,4 @@
+interface:
+  display_name: "ONES Ticket Automation"
+  short_description: "Automate ONES ticket reads, exports, and cleanup"
+  default_prompt: "Use $ones-ticket-mcp to retrieve an ONES ticket and close the temporary session."

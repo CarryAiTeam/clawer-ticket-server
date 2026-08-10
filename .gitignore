@@ -17,7 +17,7 @@ config/*.local.json
 .cursor
 .claude
 .codex
-.agents
+.agents/
 AGENTS.md
 
 .cloudpivot-cli

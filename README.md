@@ -17,11 +17,11 @@
 
 ## Codex Skill
 
-项目工作区提供 `.agents/skills/ones-ticket-mcp/SKILL.md`。当在支持项目级 Skill 的 Codex 工作区中查询、读取、分页或导出 ONES 工单时，它会把中文表达归一化为范围与状态参数，并在导出写入前保留确认步骤。
+Skill 源文件位于 `skills/ones-ticket-mcp/`。它是随 npm 包发布的版本化资产，但不位于 Codex 的项目级自动发现目录；检出仓库或安装 npm 包本身都不会自动启用它。需要使用时，用户应显式将该目录复制或建立链接到目标项目的 `.agents/skills/ones-ticket-mcp/`，或自己的用户级 Skill 目录。
 
 对于 browser profile，用户的读取请求或导出 `plan` 请求即视为自动连接授权：如果首次只读调用发现会话未就绪，Skill 会直接打开临时浏览器、执行已配置的 `browser.autoLogin` 并重试原始调用，不要求额外回复“连接 ONES”。请求完成后会自动关闭该临时 ONES 页面并丢弃内存登录态，不要求再确认关闭。只有 ONES 实际显示 MFA、验证码、SSO 或其他人工挑战时，才需要在可见窗口操作；本规则不取消导出 `write` 的本地写入确认。
 
-该 Skill 为调用方提供参数构造与流程引导，不替代服务端的 schema、项目白名单、cursor 或 selection 校验；它也不会随 npm 包一起安装到其他工作区。
+该 Skill 为调用方提供参数构造与流程引导，不替代服务端的 schema、项目白名单、cursor 或 selection 校验。当前不提供自动安装器；后续若需要将多个 Skill 和 MCP 连接作为一个产品分发，再以 Plugin 取代这一显式安装步骤。
 
 ## 三类中文意图
 
