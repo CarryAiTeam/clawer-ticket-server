@@ -179,8 +179,8 @@ export class TicketApplication {
   }
 
   /**
-   * 对一个完整受控查询执行导出。plan 阶段返回有序 ID 集合的 fingerprint；write 阶段
-   * 必须回传它，服务会重新完整枚举并在集合变化时拒绝写入。
+   * 对一个完整受控查询执行导出。plan 阶段返回有序 ID 集合的 fingerprint；直接 write
+   * 在同一调用中使用当前选择，带此前 plan selection 的 write 则重新枚举并拒绝集合变化。
    */
   async exportTicketSearch(
     profile: string | undefined,
@@ -199,10 +199,7 @@ export class TicketApplication {
       expectedCount: summaries.length,
       fingerprint: ticketSelectionFingerprint(resolved.fingerprint, summaries.map((item) => item.id)),
     };
-    if (mode === "write") {
-      if (!selection) {
-        throw new TicketError("QUERY_INVALID", "ticket_export mode write for a query requires the selection returned by a prior plan");
-      }
+    if (mode === "write" && selection) {
       const expected = validateSelection(selection);
       if (expected.expectedCount !== frozenSelection.expectedCount || expected.fingerprint !== frozenSelection.fingerprint) {
         throw new TicketError("SELECTION_CHANGED", "The query selection changed after plan; run ticket_export with mode plan again before writing");
@@ -217,7 +214,7 @@ export class TicketApplication {
         const ticket = await this.getTicket(resolved.profile.name, { id: item.id });
         exports.push(await this.exportLoadedTicket(resolved.profile.name, ticket, mode, mediaMode, usage));
       } catch (error) {
-        // plan 是确认前的完整性闸门，不能把不完整计划交给调用方确认。
+        // plan 是预览前的完整性闸门，不能把不完整计划交给调用方审阅。
         if (mode === "plan") throw error;
         // write 已有前项落盘时，返回每一项的稳定失败结果；重新 plan 后可借助幂等 bundle 继续。
         failedTickets.push(exportFailure(item.id, error));

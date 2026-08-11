@@ -24,13 +24,16 @@
 
 语义是负责人为当前用户，状态类型为未开始或进行中，同时进一步收窄标题和工作项类型。
 
-## 查询导出
+## 查询导出与预览
+
+明确“下载/导出到本地”时，直接调用 `ticket_export({ query, mode:"write" })`；省略 mode 也会写入当前完整选择。
+
+只有用户明确要求计划、预览或先看范围时，才：
 
 1. 用 `ticket_export({ query, mode:"plan" })` 查看完整选择和每张计划。
-2. 审阅 selection。
-3. 用同一 query 和 selection 调用 `ticket_export({ query, selection, mode:"write" })`。
+2. 在用户后续明确要求按该计划导出时，用同一 query 和 selection 调用 `ticket_export({ query, selection, mode:"write" })`。
 
-若只需一张工单，传 `ticket:{ id }` 即可。若只需元数据，传 `media:"metadata"`。
+若只需一张工单，传 `ticket:{ id }` 即可；若只需元数据，传 `media:"metadata"`。
 
 ## 延期能力
 

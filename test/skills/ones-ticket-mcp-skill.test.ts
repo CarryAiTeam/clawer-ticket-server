@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-type Call = { tool: string; purpose?: string; outcome?: string; retryOf?: number; autoLogin?: boolean; confirmed?: boolean; match?: { field: string; value: string; mode: string } };
+type Call = { tool: string; purpose?: string; outcome?: string; retryOf?: number; autoLogin?: boolean; mode?: "plan" | "write"; selection?: "prior-plan"; match?: { field: string; value: string; mode: string } };
 type Scenario = {
   id: string;
   route: "list" | "detail" | "export" | "blocked";
   calls: Call[];
-  policy: { auth: "ready" | "automatic" | "challenge" | "not-needed"; retryOnce?: boolean; cleanup: "disconnect" | "leave-open" | "if-session"; userConfirmation: boolean; queryBlocked?: boolean; exactMatch?: boolean };
+  policy: { auth: "ready" | "automatic" | "challenge" | "not-needed"; retryOnce?: boolean; cleanup: "disconnect" | "leave-open" | "if-session"; exportFlow?: "plan-only" | "direct-write" | "planned-write"; queryBlocked?: boolean; exactMatch?: boolean };
 };
 
 const skillRoot = new URL("../../skills/ones-ticket-mcp/", import.meta.url);
@@ -44,6 +44,7 @@ for (const rule of [
   "不要求回复“连接 ONES”",
   "authentication.authorized: true",
   "无需二次确认",
+  "明确“下载到本地、导出、保存到本地、获取到本地”本身也是一次写入授权",
   "不要求用户确认关闭",
   "MFA",
   "CAPTCHA",
@@ -60,24 +61,25 @@ for (const reference of references) {
   assert.ok(content.trim().length > 0, `${reference} must be usable`);
   assert.ok(!/\]\((?:\.\.\/|references\/)/.test(content), `${reference} must not require a nested reference hop`);
 }
+const exportSafety = await readFile(new URL("references/export-safety.md", skillRoot), "utf8");
+for (const rule of ["计划、预览、先看看", "不要先展示计划再要求“确认下载”", "mode: \"write\""]) {
+  assert.ok(exportSafety.includes(rule), `export safety must retain ${rule}`);
+}
 assert.match(metadata, /^interface:\r?\n/m);
 assert.match(metadata, /display_name:\s*"[^"]+"/);
 assert.match(metadata, /short_description:\s*"[^"]{25,64}"/);
 assert.match(metadata, /default_prompt:\s*"[^"]*\$ones-ticket-mcp[^"]*"/);
 
 // P1: machine-readable scenarios prove ordering and the necessary exceptions.
-assert.equal(fixture.version, 1);
-assert.equal(fixture.scenarios.length, 7, "fixture must cover all P0/P1 paths");
+assert.equal(fixture.version, 2);
+assert.equal(fixture.scenarios.length, 8, "fixture must cover all P0/P1 paths");
 assert.equal(new Set(fixture.scenarios.map(({ id }) => id)).size, fixture.scenarios.length, "scenario IDs must be unique");
 for (const current of fixture.scenarios) {
   assert.ok(current.calls.length > 0, `${current.id} must describe calls`);
   for (const { tool } of current.calls) assert.ok(tools.has(tool), `${current.id} uses an unknown tool`);
   if (current.policy.cleanup === "disconnect") assert.ok(current.calls.some(({ tool }) => tool === "ticket_browser_disconnect"), `${current.id} must clean up`);
   if (current.policy.cleanup === "leave-open") assert.ok(!current.calls.some(({ tool }) => tool === "ticket_browser_disconnect"), `${current.id} must leave the challenge page open`);
-  if (current.policy.userConfirmation) {
-    assert.equal(current.route, "export", "only export write may require confirmation");
-    assert.ok(current.calls.some(({ tool, confirmed }) => tool === "ticket_export" && confirmed), "confirmation must be tied to write");
-  }
+  if (current.policy.exportFlow) assert.equal(current.route, "export", "an export flow must use the export route");
 }
 
 {
@@ -86,7 +88,6 @@ for (const current of fixture.scenarios) {
   assert.deepEqual(search?.match, { field: "number", value: "209488", mode: "exact" });
   assert.ok(indexOf(current.calls, "ticket_search") < indexOf(current.calls, "ticket_get"));
   assert.ok(indexOf(current.calls, "ticket_get") < indexOf(current.calls, "ticket_browser_disconnect"));
-  assert.equal(current.policy.userConfirmation, false);
 }
 {
   const current = find("missing-browser-auto-login");
@@ -114,16 +115,27 @@ for (const current of fixture.scenarios) {
 {
   const current = find("export-plan");
   assert.equal(current.calls[0]!.purpose, "plan");
-  assert.equal(current.policy.userConfirmation, false);
+  assert.equal(current.calls[0]!.mode, "plan");
+  assert.equal(current.policy.exportFlow, "plan-only");
+  assert.ok(!current.calls.some(({ purpose }) => purpose === "write"), "an explicit preview request must not write");
 }
 {
-  const current = find("confirmed-export-write");
-  const plan = indexOf(current.calls, "ticket_export");
-  const write = current.calls.findIndex((call, position) => position > plan && call.tool === "ticket_export" && call.purpose === "write");
-  assert.notEqual(write, -1, "export write must follow plan");
-  assert.equal(current.calls[write]!.confirmed, true);
-  assert.equal(current.policy.userConfirmation, true);
-  assert.ok(write < indexOf(current.calls, "ticket_browser_disconnect"));
+  const current = find("direct-export-write");
+  const write = indexOf(current.calls, "ticket_export");
+  assert.equal(current.calls[write]!.purpose, "write");
+  assert.equal(current.calls[write]!.mode, "write");
+  assert.equal(current.calls[write]!.selection, undefined);
+  assert.equal(current.policy.exportFlow, "direct-write");
+  assert.ok(!current.calls.some(({ purpose }) => purpose === "plan"), "a direct export must not wait for a preview or repeated confirmation");
+}
+{
+  const current = find("planned-export-write");
+  const write = indexOf(current.calls, "ticket_export");
+  assert.equal(current.calls[write]!.purpose, "write");
+  assert.equal(current.calls[write]!.mode, "write");
+  assert.equal(current.calls[write]!.selection, "prior-plan");
+  assert.equal(current.policy.exportFlow, "planned-write");
+  assert.ok(!current.calls.some(({ purpose }) => purpose === "plan"), "writing an already previewed export must reuse rather than repeat its plan");
 }
 {
   const current = find("project-without-allowlist");

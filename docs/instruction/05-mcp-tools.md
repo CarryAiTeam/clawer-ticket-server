@@ -39,11 +39,11 @@
 
 - 单张导出传 `ticket`。
 - 查询导出传与 `ticket_search` 相同的 `query`，但不允许分页字段。
-- 默认 `mode:"plan"`，不写本机。
-- 查询 `write` 必须回传此前 `plan` 返回的 selection。
+- 默认 `mode:"write"`，直接写入本机；只有显式 `mode:"plan"` 才是不写入的预览。
+- 查询直接 `write` 在同一调用中冻结并写入当前选择；携带此前 `plan` 的 selection 时会校验该选择。
 - 默认 `media:"download"`；`metadata` 仅写入元数据和索引。
 
-查询写入会重新完整枚举并检查 selection；选择变化返回 `SELECTION_CHANGED`。服务在所有选中详情读取成功前不会启动任何写入会话。
+查询写入会重新完整枚举；带 selection 的写入在选择变化时返回 `SELECTION_CHANGED`。服务在所有选中详情读取成功前不会启动任何写入会话。
 
 ## 明确不存在的接口
 

@@ -13,13 +13,13 @@
 | \`ticket_connection_status\` | 对 profile 执行小型只读授权探测。 |
 | \`ticket_search\` | 只读搜索扁平工单摘要。 |
 | \`ticket_get\` | 只读读取一张工单的有界详情、评论和附件元数据。 |
-| \`ticket_export\` | 计划或显式写入完整工单 bundle，并按确认下载媒体。 |
+| \`ticket_export\` | 显式预览或直接写入完整工单 bundle，并下载关联媒体。 |
 
 ## Codex Skill
 
 Skill 源文件位于 `skills/ones-ticket-mcp/`。它是随 npm 包发布的版本化资产，但不位于 Codex 的项目级自动发现目录；检出仓库或安装 npm 包本身都不会自动启用它。需要使用时，用户应显式将该目录复制或建立链接到目标项目的 `.agents/skills/ones-ticket-mcp/`，或自己的用户级 Skill 目录。
 
-对于 browser profile，用户的读取请求或导出 `plan` 请求即视为自动连接授权：如果首次只读调用发现会话未就绪，Skill 会直接打开临时浏览器、执行已配置的 `browser.autoLogin` 并重试原始调用，不要求额外回复“连接 ONES”。请求完成后会自动关闭该临时 ONES 页面并丢弃内存登录态，不要求再确认关闭。只有 ONES 实际显示 MFA、验证码、SSO 或其他人工挑战时，才需要在可见窗口操作；本规则不取消导出 `write` 的本地写入确认。
+对于 browser profile，用户的读取请求、导出 `plan` 请求或明确本地下载请求即视为自动连接授权：如果首次调用发现会话未就绪，Skill 会直接打开临时浏览器、执行已配置的 `browser.autoLogin` 并重试原始调用，不要求额外回复“连接 ONES”。请求完成后会自动关闭该临时 ONES 页面并丢弃内存登录态，不要求再确认关闭。只有 ONES 实际显示 MFA、验证码、SSO 或其他人工挑战时，才需要在可见窗口操作。明确的本地下载指令本身就是写入授权，不再要求二次确认。
 
 该 Skill 为调用方提供参数构造与流程引导，不替代服务端的 schema、项目白名单、cursor 或 selection 校验。当前不提供自动安装器；后续若需要将多个 Skill 和 MCP 连接作为一个产品分发，再以 Plugin 取代这一显式安装步骤。
 
@@ -27,7 +27,7 @@ Skill 源文件位于 `skills/ones-ticket-mcp/`。它是随 npm 包发布的版�
 
 - “查看、查阅、查询、列出、获取 ONES 工单”只调用 `ticket_search`，默认是当前用户负责且未完成的列表。
 - “查看详情、查阅某工单详情、获取某工单详情”调用 `ticket_get`，不落盘、不下载二进制媒体。
-- “下载到本地、导出、保存到本地、获取到本地”调用 `ticket_export`，按 `plan → 确认 → write` 获取完整详情、评论和关联图片/附件。
+- “下载到本地、导出、保存到本地、获取到本地”调用 `ticket_export` 并直接写入；只有同一请求明确说计划、预览或先看看导出范围时才返回 `plan`。
 - 用户给出 `209488` 这类纯数字工单号时，Skill 会先自动搜索并精确匹配 `number`，再用服务端返回的内部 `id` 读取详情。
 
 “到本地/下载/导出/保存”优先级高于“查看/获取”；裸“获取”不会触发本地写入。
@@ -64,11 +64,9 @@ Skill 源文件位于 `skills/ones-ticket-mcp/`。它是随 npm 包发布的版�
 
 单张导出传 `ticket`；查询导出传与 `ticket_search` 相同的 `query`（query 不含 `page`）。
 
-1. 调用 \`ticket_export({ query, mode: "plan" })\`。
-2. 审阅返回的 \`selection\` 与计划。
-3. 将完全相同的查询和 \`selection\` 回传给 \`mode: "write"\`。
+明确下载时，调用 \`ticket_export({ query, mode: "write" })\`；省略 `mode` 也默认直接写入当前完整选择。服务在同一调用中冻结该选择，并逐张原子写入，不会把全部详情保留在内存中。
 
-写入前会重新完整枚举查询结果；数量或有序 ID 集合变化时返回 \`SELECTION_CHANGED\`。计划阶段会逐张读取详情但不写本地；确认后的 write 也逐张读取、逐张原子写入，不会把全部详情保留在内存中。默认 \`media: "download"\`，显式 \`media: "metadata"\` 时不下载二进制附件。
+只有用户明确要求预览时，才调用 \`ticket_export({ query, mode: "plan" })\`。计划会返回 \`selection\`，后续“按刚才计划导出”需将完全相同的查询、\`selection\` 与 media 回传给 \`mode: "write"\`；数量或有序 ID 集合变化时返回 \`SELECTION_CHANGED\`，不会静默扩大写入范围。默认 \`media: "download"\`，显式 \`media: "metadata"\` 时不下载二进制附件。
 
 服务端默认限制查询导出最多 50 张工单、500 个媒体文件、单文件 50 MiB、总媒体 512 MiB。可在 `storage.exportLimits` 中调整；超限返回 `EXPORT_LIMIT_EXCEEDED`。查询 write 会逐张处理并返回 `complete`、`completedCount` 和 `failedTickets`，重新 plan 后可利用已有 bundle 的幂等复用继续执行。
 

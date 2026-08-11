@@ -31,7 +31,7 @@ provider 返回后，应用层校验 `returned === items.length`、有效的 `to
 1. 用固定每页 50 条请求，直到 `hasNextPage:false`。
 2. 拒绝总数变化、重复 ID、总数不符、过大选择或项目越界。
 3. 对排序后的 ID 集合生成 selection fingerprint。
-4. `write` 必须提供相同的 `expectedCount` 和 fingerprint，否则抛 `SELECTION_CHANGED`。
+4. 直接 `write` 使用本次枚举的冻结选择；只有携带此前 plan 的 `selection` 时，才验证相同的 `expectedCount` 和 fingerprint，并在变化时抛 `SELECTION_CHANGED`。
 5. 先读取所有选中详情；任一详情失败时不启动写入。
 6. 只有所有详情成功后，才按每张工单的原子会话执行 plan 或 write。
 

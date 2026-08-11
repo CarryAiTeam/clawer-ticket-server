@@ -11,6 +11,6 @@
 | `SOURCE_NOT_ALLOWED` | 保持当前范围并说明项目不在 allowlist；不要改成更宽或不同的项目查询。 |
 | `QUERY_INVALID` / `UNSUPPORTED_FILTER` | 用受控 `scope`、`state`、`where` 重构；冲突意图才请用户澄清。 |
 | `QUERY_CURSOR_INVALID` | 从原始查询第一页重新开始。 |
-| `SELECTION_CHANGED` | 重新 plan，再取得 write 确认。 |
+| `SELECTION_CHANGED` | 重新 plan 并展示变化后的范围；不要静默写入新选择。 |
 | `EXPORT_LIMIT_EXCEEDED` | 缩小范围或分批。 |
 | `SOURCE_RATE_LIMITED` / `SOURCE_FAILED` / `SOURCE_SCHEMA_CHANGED` | 不重复造成压力的相同调用；简洁报告来源异常及可重试条件。 |

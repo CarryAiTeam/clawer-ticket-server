@@ -126,7 +126,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     ticket: ticketSchema.optional(),
     query: searchQuerySchema.optional(),
     selection: z.object({ expectedCount: z.number().int().min(0), fingerprint: z.string().regex(/^[a-f0-9]{64}$/i) }).strict().optional(),
-    mode: z.enum(["plan", "write"]).default("plan").describe("plan is read-only; write commits a local bundle and requires confirmation"),
+    mode: z.enum(["plan", "write"]).default("write").describe("write commits a local bundle immediately; use plan only when the caller explicitly requests a preview"),
     media: z.enum(["metadata", "download"]).default("download").describe("download includes attachment-backed images and binaries during write; metadata writes no binary media"),
   }).strict().catch(() => invalidTicketExportInput as never);
   server.registerTool(
@@ -151,7 +151,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_export",
     {
       title: "Export a ticket work item",
-      description: "Local export for 下载到本地、导出、保存到本地 or 获取到本地. It fetches complete normalized details including comments and attachment-backed images. Always call mode=plan first; only an explicitly confirmed mode=write writes bundles. Query writes require the selection fingerprint returned by a prior plan, enforce item/media budgets, and return completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
+      description: "Local export for 下载到本地、导出、保存到本地 or 获取到本地. It fetches complete normalized details including comments and attachment-backed images. Defaults to mode=write for a direct local export; use mode=plan only when the caller explicitly requests a preview. Query writes with a selection returned by a prior plan validate that frozen selection; direct query writes export the current matching selection in one call. Item/media budgets are enforced and results include completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
       inputSchema: ticketExportInputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },

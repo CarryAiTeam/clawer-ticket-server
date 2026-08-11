@@ -50,13 +50,21 @@ const browserSessions: BrowserSessionProvider = {
   },
   async closeBrowserSession() {},
 };
+let plannedExportCount = 0;
+let committedExportCount = 0;
 const bundleStore: TicketBundleStore = {
-  async plan() { return { directory: "D:/ones-test-exports", files: [], contentHash: "test", action: "created" }; },
+  async plan() {
+    plannedExportCount += 1;
+    return { directory: "D:/ones-test-exports", files: [], contentHash: "test", action: "created" };
+  },
   async beginExport() {
     return {
       missingMedia: [],
       async writeMedia() {},
-      async commit() { return { directory: "D:/ones-test-exports", files: [], contentHash: "test", action: "created" as const, exportId: "test", status: "created" as const }; },
+      async commit() {
+        committedExportCount += 1;
+        return { directory: "D:/ones-test-exports", files: [], contentHash: "test", action: "created" as const, exportId: "test", status: "created" as const };
+      },
       async abort() {},
     };
   },
@@ -79,7 +87,7 @@ try {
   assert.match(byName.get("ticket_search")?.description ?? "", /获取 ONES/);
   assert.match(byName.get("ticket_get")?.description ?? "", /never writes local files/);
   assert.match(byName.get("ticket_export")?.description ?? "", /Local export/);
-  assert.match(byName.get("ticket_export")?.description ?? "", /mode=plan first/);
+  assert.match(byName.get("ticket_export")?.description ?? "", /Defaults to mode=write/);
   for (const [name, args] of [
     ["ticket_connection_status", { profile: "test" }],
     ["ticket_get", { profile: "test", ticket: { id: "task-test" } }],
@@ -87,12 +95,20 @@ try {
     const result = await client.callTool({ name, arguments: args });
     assert.equal(result.isError, undefined, `${name} must succeed`);
   }
-  const mediaExport = await client.callTool({ name: "ticket_export", arguments: { profile: "test", ticket: { id: "task-test" }, mode: "plan" } });
-  assert.equal(mediaExport.isError, undefined, "ticket_export must default media to download");
+  const commitsBeforeDefaultExport = committedExportCount;
+  const mediaExport = await client.callTool({ name: "ticket_export", arguments: { profile: "test", ticket: { id: "task-test" } } });
+  assert.equal(mediaExport.isError, undefined, "ticket_export must default to a direct write with download media");
+  assert.equal(committedExportCount, commitsBeforeDefaultExport + 1, "an omitted mode must commit a single-ticket export");
   const mediaExportPayload = responseJson(mediaExport);
   const singleExportBudget = (mediaExportPayload.export as { budget: { mediaMode: string; limits: { maxItems: number } } }).budget;
   assert.equal(singleExportBudget.mediaMode, "download");
   assert.equal(singleExportBudget.limits.maxItems, 50);
+  const plansBeforeExplicitPreview = plannedExportCount;
+  const commitsBeforeExplicitPreview = committedExportCount;
+  const explicitPreview = await client.callTool({ name: "ticket_export", arguments: { profile: "test", ticket: { id: "task-test" }, mode: "plan" } });
+  assert.equal(explicitPreview.isError, undefined, "mode=plan must remain available for an explicit preview");
+  assert.equal(plannedExportCount, plansBeforeExplicitPreview + 1, "an explicit preview must call the bundle planner");
+  assert.equal(committedExportCount, commitsBeforeExplicitPreview, "an explicit preview must not write a bundle");
 
   const firstSearch = await client.callTool({
     name: "ticket_search",
@@ -166,6 +182,13 @@ try {
   assert.equal(queryExport.selection.expectedCount, 2);
   assert.equal(queryExport.budget.plannedMedia.plannedCount, 0);
   assert.equal(queryExport.budget.limits.maxAttachments, 500);
+  const commitsBeforeDirectQueryExport = committedExportCount;
+  const directQueryExport = await client.callTool({
+    name: "ticket_export",
+    arguments: { profile: "test", query: { scope: "self", state: "active" }, media: "metadata" },
+  });
+  assert.equal(directQueryExport.isError, undefined, "a query export without mode or selection must write the current query selection directly");
+  assert.equal(committedExportCount, commitsBeforeDirectQueryExport + 2, "a direct query export must write every current result");
   const changedSelection = await client.callTool({
     name: "ticket_export",
     arguments: { profile: "test", query: { scope: "self", state: "active" }, mode: "write", media: "metadata", selection: { expectedCount: 2, fingerprint: "0".repeat(64) } },

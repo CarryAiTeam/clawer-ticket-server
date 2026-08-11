@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "scenarios": [
     {
       "id": "ready-numeric-detail",
@@ -10,7 +10,7 @@
         { "tool": "ticket_get", "purpose": "read-resolved-id" },
         { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
       ],
-      "policy": { "auth": "ready", "cleanup": "disconnect", "userConfirmation": false, "exactMatch": true }
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exactMatch": true }
     },
     {
       "id": "missing-browser-auto-login",
@@ -23,7 +23,7 @@
         { "tool": "ticket_search", "retryOf": 0, "purpose": "retry-original-read" },
         { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
       ],
-      "policy": { "auth": "automatic", "retryOnce": true, "cleanup": "disconnect", "userConfirmation": false }
+      "policy": { "auth": "automatic", "retryOnce": true, "cleanup": "disconnect" }
     },
     {
       "id": "mfa-or-sso-challenge",
@@ -34,7 +34,7 @@
         { "tool": "ticket_connection_status", "purpose": "identify-browser" },
         { "tool": "ticket_browser_connect", "outcome": "HUMAN_ACTION_REQUIRED", "purpose": "leave-visible-challenge" }
       ],
-      "policy": { "auth": "challenge", "cleanup": "leave-open", "userConfirmation": false }
+      "policy": { "auth": "challenge", "cleanup": "leave-open" }
     },
     {
       "id": "numeric-not-found",
@@ -45,28 +45,37 @@
         { "tool": "ticket_search", "purpose": "search-next-page" },
         { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
       ],
-      "policy": { "auth": "ready", "cleanup": "disconnect", "userConfirmation": false, "exactMatch": false }
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exactMatch": false }
     },
     {
       "id": "export-plan",
       "route": "export",
-      "request": "导出工单到本地但先给我计划",
+      "request": "导出工单到本地，但先看看计划",
       "calls": [
-        { "tool": "ticket_export", "purpose": "plan" },
+        { "tool": "ticket_export", "purpose": "plan", "mode": "plan" },
         { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
       ],
-      "policy": { "auth": "ready", "cleanup": "disconnect", "userConfirmation": false }
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "plan-only" }
     },
     {
-      "id": "confirmed-export-write",
+      "id": "direct-export-write",
       "route": "export",
-      "request": "确认按刚才计划写入导出包",
+      "request": "把这六个工单下载到本地",
       "calls": [
-        { "tool": "ticket_export", "purpose": "plan" },
-        { "tool": "ticket_export", "purpose": "write", "confirmed": true },
+        { "tool": "ticket_export", "purpose": "write", "mode": "write" },
         { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
       ],
-      "policy": { "auth": "ready", "cleanup": "disconnect", "userConfirmation": true }
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "direct-write" }
+    },
+    {
+      "id": "planned-export-write",
+      "route": "export",
+      "request": "按刚才计划导出这些工单",
+      "calls": [
+        { "tool": "ticket_export", "purpose": "write", "mode": "write", "selection": "prior-plan" },
+        { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
+      ],
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "planned-write" }
     },
     {
       "id": "project-without-allowlist",
@@ -75,7 +84,7 @@
       "calls": [
         { "tool": "ticket_connection_status", "outcome": "SOURCE_NOT_ALLOWED", "purpose": "check-allowedProjects" }
       ],
-      "policy": { "auth": "not-needed", "cleanup": "if-session", "userConfirmation": false, "queryBlocked": true }
+      "policy": { "auth": "not-needed", "cleanup": "if-session", "queryBlocked": true }
     }
   ]
 }
