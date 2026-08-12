@@ -33,6 +33,7 @@ function createTicketApplication(config: Awaited<ReturnType<typeof loadConfig>>,
     mediaProvider: provider as OnesBrowserSource,
     bundleStore: new LocalTicketBundleStore(config.storage.root),
     redaction: config.storage.redaction,
+    exportLimits: config.storage.exportLimits,
   });
 }
 

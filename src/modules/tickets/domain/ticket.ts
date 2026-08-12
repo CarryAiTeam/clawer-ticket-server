@@ -106,34 +106,85 @@ export interface InlineTicket extends CanonicalTicket {
   };
 }
 
-export interface TicketIndexItem {
-  id: string;
-  key?: string;
-  title: string;
-  status?: string;
-  assignee?: Person;
-  projectId?: string;
-  parentId?: string;
-  path?: string;
-  childIds: string[];
-  /** 私有列表接口不会标识作为祖先节点注入的行。 */
-  matchedFilter: boolean | "unknown";
-  includedAsAncestor: boolean;
+/** 查询数据范围；默认只查询当前用户负责的工单。 */
+export type TicketSearchScope = "self" | "project";
+
+/** 查询状态范围；默认排除已完成工单。 */
+export type TicketSearchState = "open" | "active" | "done" | "all";
+
+/** 首版只允许由服务端编译的平铺 AND 条件，绝不接收 provider 原始筛选表达式。 */
+export type TicketFilter =
+  | { field: "title"; op: "contains"; value: string }
+  | { field: "issueType"; op: "in"; values: string[] }
+  | { field: "statusCategory"; op: "in" | "notIn"; values: TicketStatusCategory[] }
+  | { field: "assignee"; op: "in"; values: ["me"] };
+
+export type TicketStatusCategory = "to_do" | "in_progress" | "done";
+
+/** MCP 公开搜索输入；profile 仍由受控本地配置解析。 */
+export interface TicketSearchInput {
+  profile?: string;
+  scope?: TicketSearchScope;
+  state?: TicketSearchState;
+  where?: { all: TicketFilter[] };
+  page?: { size?: number; cursor?: string };
 }
 
-export interface TicketIndexTree {
-  view: "my_open_tree";
-  items: TicketIndexItem[];
-  roots: string[];
-  externalParentIds: string[];
-  page: {
-    /** 树中的所有行，包括为补充上下文而注入的父级行。 */
-    count: number;
-    /** 匹配“当前用户 + 未完成”固定筛选条件的行。 */
-    matchedCount: number;
-    /** 未匹配固定筛选条件的树上下文行。 */
-    contextCount: number;
-    totalCount?: number;
-    hasNextPage: boolean;
+/** 应用层已验证的 provider-neutral 查询，不含公开 cursor 或 ONES variables。 */
+export interface TicketSearchQuery {
+  scope: TicketSearchScope;
+  state: TicketSearchState;
+  filter: { all: TicketFilter[] };
+  sort: { field: "createTime"; direction: "desc" };
+  page: { size: number; after?: string };
+}
+
+/** 列表检索只返回低成本的扁平摘要，详情必须显式调用 ticket_get。 */
+export interface TicketSummary {
+  id: string;
+  key?: string;
+  number?: string;
+  title: string;
+  status?: { id?: string; name?: string; category?: TicketStatusCategory };
+  assignee?: Person;
+  projectId?: string;
+}
+
+/** provider 返回内部续页信息；原始 endCursor 不会离开应用层。 */
+export interface TicketSearchProviderPage {
+  returned: number;
+  totalCount: number;
+  hasNextPage: boolean;
+  endCursor?: string;
+}
+
+export interface TicketSearchProviderResult {
+  items: TicketSummary[];
+  page: TicketSearchProviderPage;
+}
+
+/** ticket_search 的稳定、对外结果；nextCursor 始终由本服务签发。 */
+export interface TicketSearchResult {
+  query: {
+    scope: TicketSearchScope;
+    state: TicketSearchState;
+    normalizedFilter: { all: TicketFilter[] };
+    fingerprint: string;
   };
+  items: TicketSummary[];
+  page: {
+    size: number;
+    returned: number;
+    totalCount: number;
+    totalCountExact: true;
+    hasNextPage: boolean;
+    nextCursor?: string;
+  };
+  warnings?: string[];
+}
+
+/** 查询型导出在 plan 阶段返回、并在 write 阶段必须回传的选择冻结。 */
+export interface TicketSearchSelection {
+  expectedCount: number;
+  fingerprint: string;
 }

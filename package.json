@@ -9,6 +9,7 @@
   "files": [
     "dist",
     "config/*.example.json",
+    "skills/**",
     "README.md"
   ],
   "publishConfig": {
@@ -30,7 +31,7 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "prepack": "npm run build",
-    "test": "npm run build && tsx test/package/npm-package.test.ts && tsx test/config/config-examples.test.ts && tsx test/integration/providers/ones/ones-provider.test.ts && tsx test/mcp/ticket-tools.test.ts && tsx test/mcp/stdio.test.ts"
+    "test": "npm run build && tsx test/package/npm-package.test.ts && tsx test/config/config-examples.test.ts && tsx test/integration/providers/ones/ones-provider.test.ts && tsx test/mcp/ticket-search-intent.test.ts && tsx test/mcp/ticket-tools.test.ts && tsx test/mcp/stdio.test.ts && tsx test/skills/ones-ticket-mcp-skill.test.ts"
   },
   "keywords": [
     "mcp",

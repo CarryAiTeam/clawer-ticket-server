@@ -1,4 +1,4 @@
-import { CanonicalTicket, TicketAttachment, TicketIndexTree, TicketReference } from "./ticket.js";
+import { CanonicalTicket, TicketAttachment, TicketReference, TicketSearchProviderResult, TicketSearchQuery } from "./ticket.js";
 
 /** 受控本地工单 profile 中与 provider 无关的部分。 */
 export interface TicketProfile {
@@ -11,6 +11,8 @@ export interface TicketProfile {
 
 export interface TicketProfileResolver {
   get(name: string): TicketProfile;
+  /** 显式名称优先；仅配置一个 profile 时允许省略名称。 */
+  resolve(name?: string): TicketProfile;
 }
 
 export interface ConnectionStatus {
@@ -24,7 +26,8 @@ export interface ConnectionStatus {
 export interface TicketProvider {
   readonly providerId: string;
   status(profile: TicketProfile): Promise<ConnectionStatus>;
-  listMyOpen(profile: TicketProfile, limit: number): Promise<TicketIndexTree>;
+  /** 只接受应用层规范化后的查询；provider 原始表达式不属于此 port。 */
+  search(profile: TicketProfile, query: TicketSearchQuery): Promise<TicketSearchProviderResult>;
   getTicket(profile: TicketProfile, reference: TicketReference): Promise<CanonicalTicket>;
 }
 
@@ -37,7 +40,12 @@ export interface TicketMediaDownload {
 
 /** 显式能力边界：读取工单元数据不等于下载二进制媒体。 */
 export interface TicketMediaProvider {
-  downloadAttachment(profile: TicketProfile, attachment: TicketAttachment): Promise<TicketMediaDownload>;
+  downloadAttachment(profile: TicketProfile, attachment: TicketAttachment, options?: TicketMediaDownloadOptions): Promise<TicketMediaDownload>;
+}
+
+export interface TicketMediaDownloadOptions {
+  /** provider 应在读取响应体前尽可能执行的单文件上限。 */
+  maxBytes?: number;
 }
 
 export type TicketMediaMode = "metadata" | "download";

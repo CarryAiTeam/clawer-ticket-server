@@ -1,0 +1,90 @@
+{
+  "version": 2,
+  "scenarios": [
+    {
+      "id": "ready-numeric-detail",
+      "route": "detail",
+      "request": "查看 209488 工单",
+      "calls": [
+        { "tool": "ticket_search", "purpose": "resolve-number", "match": { "field": "number", "value": "209488", "mode": "exact" } },
+        { "tool": "ticket_get", "purpose": "read-resolved-id" },
+        { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
+      ],
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exactMatch": true }
+    },
+    {
+      "id": "missing-browser-auto-login",
+      "route": "detail",
+      "request": "读取一个尚未连接浏览器的工单",
+      "calls": [
+        { "tool": "ticket_search", "outcome": "SOURCE_UNAUTHORIZED" },
+        { "tool": "ticket_connection_status", "purpose": "identify-browser" },
+        { "tool": "ticket_browser_connect", "autoLogin": true, "purpose": "automatic-authorization" },
+        { "tool": "ticket_search", "retryOf": 0, "purpose": "retry-original-read" },
+        { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
+      ],
+      "policy": { "auth": "automatic", "retryOnce": true, "cleanup": "disconnect" }
+    },
+    {
+      "id": "mfa-or-sso-challenge",
+      "route": "detail",
+      "request": "读取触发 MFA/SSO 的工单",
+      "calls": [
+        { "tool": "ticket_search", "outcome": "HUMAN_ACTION_REQUIRED" },
+        { "tool": "ticket_connection_status", "purpose": "identify-browser" },
+        { "tool": "ticket_browser_connect", "outcome": "HUMAN_ACTION_REQUIRED", "purpose": "leave-visible-challenge" }
+      ],
+      "policy": { "auth": "challenge", "cleanup": "leave-open" }
+    },
+    {
+      "id": "numeric-not-found",
+      "route": "detail",
+      "request": "查看不存在的数字工单号",
+      "calls": [
+        { "tool": "ticket_search", "purpose": "search-page-1" },
+        { "tool": "ticket_search", "purpose": "search-next-page" },
+        { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
+      ],
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exactMatch": false }
+    },
+    {
+      "id": "export-plan",
+      "route": "export",
+      "request": "导出工单到本地，但先看看计划",
+      "calls": [
+        { "tool": "ticket_export", "purpose": "plan", "mode": "plan" },
+        { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
+      ],
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "plan-only" }
+    },
+    {
+      "id": "direct-export-write",
+      "route": "export",
+      "request": "把这六个工单下载到本地",
+      "calls": [
+        { "tool": "ticket_export", "purpose": "write", "mode": "write" },
+        { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
+      ],
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "direct-write" }
+    },
+    {
+      "id": "planned-export-write",
+      "route": "export",
+      "request": "按刚才计划导出这些工单",
+      "calls": [
+        { "tool": "ticket_export", "purpose": "write", "mode": "write", "selection": "prior-plan" },
+        { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
+      ],
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "planned-write" }
+    },
+    {
+      "id": "project-without-allowlist",
+      "route": "blocked",
+      "request": "获取所有人的工单，但 profile 没有项目白名单",
+      "calls": [
+        { "tool": "ticket_connection_status", "outcome": "SOURCE_NOT_ALLOWED", "purpose": "check-allowedProjects" }
+      ],
+      "policy": { "auth": "not-needed", "cleanup": "if-session", "queryBlocked": true }
+    }
+  ]
+}

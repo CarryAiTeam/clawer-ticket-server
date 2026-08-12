@@ -109,6 +109,13 @@ export class StaticTicketProfileResolver implements TicketProfileResolver {
     if (!profile) throw new TicketError("PROFILE_NOT_FOUND", `Profile ${name} was not found`);
     return profile;
   }
+
+  resolve(name?: string): TicketProfile {
+    if (name) return this.get(name);
+    if (this.profiles.size === 1) return this.profiles.values().next().value!;
+    if (this.profiles.size === 0) throw new TicketError("CONFIG_INVALID", "At least one ticket profile is required");
+    throw new TicketError("PROFILE_REQUIRED", `Multiple ticket profiles are configured; specify profile (${[...this.profiles.keys()].join(", ")})`);
+  }
 }
 ```
 
@@ -116,6 +123,7 @@ export class StaticTicketProfileResolver implements TicketProfileResolver {
 - 构造时校验名称唯一性，重复抛 `CONFIG_INVALID`。
 - 每个 profile `Object.freeze`，`allowedProjects` 复制为新数组，防止外部修改。
 - `get(name)` 不存在抛 `PROFILE_NOT_FOUND`。
+- `resolve()` 仅在配置唯一 profile 时允许省略名称；多 profile 时抛 `PROFILE_REQUIRED`，不依赖配置顺序。
 
 ### 3.2 装配
 

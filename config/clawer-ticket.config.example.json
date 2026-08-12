@@ -6,6 +6,12 @@
     "redaction": {
       "omitPeople": false,
       "removeFields": ["phone", "email"]
+    },
+    "exportLimits": {
+      "maxItems": 50,
+      "maxAttachments": 500,
+      "maxAttachmentBytes": 52428800,
+      "maxTotalBytes": 536870912
     }
   },
   "profiles": {
@@ -17,11 +23,9 @@
       "teamId": "REPLACE_WITH_APPROVED_TEAM_ID",
       "allowedHosts": ["tickets.example.com"],
       "allowedProjects": ["REPLACE_WITH_APPROVED_PROJECT_UUID"],
-      "listAssigneeFieldId": "REPLACE_WITH_ASSIGNEE_FIELD_UUID",
       "secretRef": "ONES_READ_TOKEN",
       "authentication": { "headerName": "Authorization", "scheme": "Bearer" },
       "requestBudget": { "maxConcurrent": 1, "maxRequestsPerMinute": 20 },
-      "defaultView": "my_open_tree",
       "inlineMaxChars": 12000,
       "classificationRules": [
         {
@@ -41,9 +45,7 @@
       "teamId": "REPLACE_WITH_APPROVED_TEAM_ID",
       "allowedHosts": ["tickets.example.com"],
       "allowedProjects": ["REPLACE_WITH_APPROVED_PROJECT_UUID"],
-      "listAssigneeFieldId": "REPLACE_WITH_ASSIGNEE_FIELD_UUID",
       "requestBudget": { "maxConcurrent": 1, "maxRequestsPerMinute": 20 },
-      "defaultView": "my_open_tree",
       "inlineMaxChars": 12000,
       "classificationRules": [
         {
@@ -56,7 +58,6 @@
       ],
       "browser": {
         "executablePath": "C:/Program Files/Google/Chrome/Application/chrome.exe",
-        "myOpenViewUrl": "https://tickets.example.com/project/#/workspace/team/REPLACE_WITH_APPROVED_TEAM_ID/filter/view/REPLACE_WITH_MY_OPEN_VIEW_ID",
         "autoLogin": {
           "email": "replace-with-local-login@example.com",
           "password": "REPLACE_WITH_LOCAL_PASSWORD",

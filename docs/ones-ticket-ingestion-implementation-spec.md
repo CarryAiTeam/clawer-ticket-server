@@ -8,7 +8,7 @@
 
 - 仅 stdio MCP、单工单、只读来源、按调用显式写入本地。
 - 实现 `api`、`graphql`、`import` 三种来源端口；`graphql` 是租户显式启用的固定只读契约，不能由工具输入自定义端点、查询或请求头。
-- 实现 `mode: "plan" | "write"`：默认 `plan`，写入必须显式选择 `write`。
+- 实现 `mode: "plan" | "write"`：默认 `write` 直接导出；只有调用方显式选择 `plan` 才返回预览。
 - 实现规则分类、脱敏、原子落盘、内容哈希和测试 fixture。
 
 ### 1.2 明确延后
@@ -23,7 +23,7 @@
 | Ports and adapters | 来源读取、标准化、存储、MCP 适配各自独立，避免 OnES 页面/API 变化扩散。 |
 | Least privilege + secret references | 只读 scope；配置中只存 secret 引用，运行时解析实际值。 |
 | Idempotent ingestion | canonical JSON 的 SHA-256 决定是否需要重写，manifest 记录来源与版本。 |
-| Plan-before-write | 写盘工具先输出可审查计划，避免模型误触发本地副作用。 |
+| Explicit preview + selection freeze | 显式预览时输出可审查计划；按该计划写入时冻结选择，避免范围漂移。 |
 | Rate budget + stop conditions | 频率由管理员 profile 给定；429、挑战页、CAPTCHA 和权限错误停止。 |
 
 MCP 官方授权规范指出 stdio 实现应从环境获取凭据；HTTP 授权令牌不得在 URL 中传递，且上游 API 令牌不能与 MCP 客户端令牌混用。参见 [MCP Authorization](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)。
@@ -202,12 +202,12 @@ Windows Credential Manager 可作为后续适配器；不得为了它把密码�
 {
   "profile": "ones-readonly",
   "ticket": { "key": "PROJECT-123" },
-  "mode": "plan",
+  "mode": "write",
   "include": { "comments": false, "attachments": "none" }
 }
 ```
 
-`mode=plan` 返回目标目录、将生成的文件、当前/新 hash 与风险提示。`mode=write` 只写入 profile 固定的 `storage.root`，并返回：
+`mode=plan` 仅在显式预览时返回目标目录、将生成的文件、当前/新 hash 与风险提示。`mode=write` 默认写入 profile 固定的 `storage.root`，并返回：
 
 ```json
 {
@@ -236,6 +236,7 @@ Windows Credential Manager 可作为后续适配器；不得为了它把密码�
 | 代码 | 含义 | 调用方动作 |
 | --- | --- | --- |
 | `PROFILE_NOT_FOUND` | profile 不存在 | 修正配置 |
+| `PROFILE_REQUIRED` | 配置多个 profile 但调用未指定 | 明确指定一个 profile |
 | `CONTRACT_UNCONFIGURED` | OnES 接口契约仍是占位符 | 由管理员提供已验证文档/样本 |
 | `SECRET_UNAVAILABLE` | 本机未注入凭据 | 本机安全设置环境变量/密钥库 |
 | `SOURCE_UNAUTHORIZED` | 401/403 | 让管理员检查只读权限 |
@@ -281,7 +282,7 @@ Windows Credential Manager 可作为后续适配器；不得为了它把密码�
 ## 9. 测试与验收
 
 - 单元：配置占位符拒绝、secret 不泄露、分类规则、路径清理、hash 稳定性、脱敏、Markdown 渲染。
-- 集成：用 `ImportTicketSource` fixture 运行 `get → plan → write → unchanged`；断言文件清单及 manifest。
+- 集成：用 `ImportTicketSource` fixture 运行 `get → direct write → unchanged`，并覆盖显式 `plan → write`；断言文件清单及 manifest。
 - HTTP fake：401、403、429 + Retry-After、5xx、未知 schema、外部重定向均产生预期错误且没有绕过请求。
 - MCP：内存传输发现四个首期工具（其中状态/获取/导出三项实际注册），验证 Zod 输入拒绝秘密字段和任意 URL。
 - 真实 OnES：仅在管理员授权的 sandbox/测试工单上运行一次 contract test；GraphQL 适配器需分别验证索引、详情、评论和附件元数据契约；不得将真实响应、请求头或凭据提交到仓库。

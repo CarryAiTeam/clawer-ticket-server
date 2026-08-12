@@ -17,4 +17,15 @@ export class StaticTicketProfileResolver implements TicketProfileResolver {
     if (!profile) throw new TicketError("PROFILE_NOT_FOUND", `Profile ${name} was not found`);
     return profile;
   }
+
+  /**
+   * 调用方显式选择时保持既有行为；只有一个受控 profile 时才允许省略名称。
+   * 多 profile 场景绝不依赖声明顺序，也不猜测当前应使用的租户。
+   */
+  resolve(name?: string): TicketProfile {
+    if (name) return this.get(name);
+    if (this.profiles.size === 1) return this.profiles.values().next().value!;
+    if (this.profiles.size === 0) throw new TicketError("CONFIG_INVALID", "At least one ticket profile is required");
+    throw new TicketError("PROFILE_REQUIRED", `Multiple ticket profiles are configured; specify profile (${[...this.profiles.keys()].join(", ")})`);
+  }
 }

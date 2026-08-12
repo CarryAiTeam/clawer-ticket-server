@@ -1,26 +1,13 @@
 import { existsSync } from "node:fs";
 import { chromium, Browser, BrowserContext, Page } from "playwright-core";
 import { OnesConfig, OnesProfile } from "./ones-config.js";
-import { TicketAttachment, TicketIndexItem, TicketIndexTree, TicketReference } from "../../modules/tickets/domain/ticket.js";
+import { TicketAttachment } from "../../modules/tickets/domain/ticket.js";
 import { TicketError as OnesError } from "../../modules/tickets/domain/ticket-error.js";
-import { BrowserSessionProvider, ConnectionStatus, TicketMediaDownload, TicketProfile } from "../../modules/tickets/domain/ports.js";
+import { BrowserSessionProvider, ConnectionStatus, TicketMediaDownload, TicketMediaDownloadOptions, TicketProfile } from "../../modules/tickets/domain/ports.js";
 import { HttpResponse, parseJsonResponse } from "../../infrastructure/http/fetch-http-client.js";
-import { OnesGraphqlSource } from "./ones-graphql-source.js";
-import { OnesRawTicketData } from "./ones-contracts.js";
+import { OnesGraphqlSource, myOpenTicketSearchQuery } from "./ones-graphql-source.js";
 
 type BrowserFetchResult = { status: number; text: string; contentType: string; csrfToken?: string; retryAfter?: string };
-type UnknownRecord = Record<string, unknown>;
-
-/** 将未知浏览器响应收窄为普通对象。 */
-function asRecord(value: unknown): UnknownRecord {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as UnknownRecord : {};
-}
-
-/** 读取浏览器响应中的非空文本字段。 */
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 const DEFAULT_CHROME_PATHS = [
   "C:/Program Files/Google/Chrome/Application/chrome.exe",
   "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
@@ -72,8 +59,6 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
   private page?: Page;
   private csrfToken?: string;
   private activeProfileName?: string;
-  /** 用于识别仅浏览器可见行的详情探测结果会复用于后续导出。 */
-  private readonly ticketCache = new Map<string, OnesRawTicketData>();
 
   /** 创建浏览器 provider，并保留会话状态在当前 MCP 进程内。 */
   constructor(config: OnesConfig) {
@@ -119,7 +104,6 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
     this.page = undefined;
     this.csrfToken = undefined;
     this.activeProfileName = undefined;
-    this.ticketCache.clear();
   }
 
   /** 对浏览器 profile 执行窄范围授权探测，不触发页面 reconciliation。 */
@@ -130,8 +114,8 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
       return { configured: true, credentialAvailable: false, authorized: false, diagnostics: ["open the supervised browser session and sign in to ONES before using this profile"] };
     }
     try {
-      // 授权探测必须保持窄范围，不能触发浏览器视图 reconciliation。
-      await super.listMyOpen(ticketProfile, 1);
+      // 授权探测只执行最小受控搜索，不触发旧的树形视图校准。
+      await this.search(ticketProfile, myOpenTicketSearchQuery(1));
       return { configured: true, credentialAvailable: true, authorized: true, diagnostics: ["the visible supervised browser session was accepted by ONES"] };
     } catch (error) {
       if (error instanceof OnesError && (error.code === "SOURCE_UNAUTHORIZED" || error.code === "HUMAN_ACTION_REQUIRED")) {
@@ -143,24 +127,53 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
   }
 
   /** 使用可见浏览器的内存认证上下文；不读取或持久化 Cookie。 */
-  override async downloadAttachment(ticketProfile: TicketProfile, attachment: TicketAttachment): Promise<TicketMediaDownload> {
+  override async downloadAttachment(ticketProfile: TicketProfile, attachment: TicketAttachment, options?: TicketMediaDownloadOptions): Promise<TicketMediaDownload> {
     const profile = this.profileFor(ticketProfile);
-    if (profile.source !== "browser") return super.downloadAttachment(ticketProfile, attachment);
+    if (profile.source !== "browser") return super.downloadAttachment(ticketProfile, attachment, options);
     const url = await this.resolveAttachmentUrl(profile, attachment.id);
     return this.withRequestSlot(profile, () => this.retryRateLimited(profile, async () => {
       await this.acquireBudget(profile);
       const page = this.requireActivePage(profile);
-      const encoded = await page.evaluate(async (value) => {
+      const encoded = await page.evaluate(async ({ value, maxBytes }) => {
         const response = await fetch(value, { credentials: "include" });
         if (!response.ok) return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: "" };
-        const bytes = new Uint8Array(await response.arrayBuffer());
+        const declaredSize = Number(response.headers.get("content-length"));
+        if (maxBytes !== undefined && Number.isSafeInteger(declaredSize) && declaredSize > maxBytes) {
+          return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: "", tooLarge: true };
+        }
+        const reader = response.body?.getReader();
+        if (!reader) return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: "" };
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        try {
+          for (;;) {
+            const next = await reader.read();
+            if (next.done) break;
+            const candidate = total + next.value.byteLength;
+            if (maxBytes !== undefined && (!Number.isSafeInteger(candidate) || candidate > maxBytes)) {
+              await reader.cancel();
+              return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: "", tooLarge: true };
+            }
+            total = candidate;
+            chunks.push(next.value);
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        const bytes = new Uint8Array(total);
+        let byteOffset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, byteOffset);
+          byteOffset += chunk.byteLength;
+        }
         let binary = "";
         for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
         return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: btoa(binary) };
-      }, url.toString()) as { status: number; contentType: string; retryAfter?: string; base64: string };
+      }, { value: url.toString(), maxBytes: options?.maxBytes }) as { status: number; contentType: string; retryAfter?: string; base64: string; tooLarge?: boolean };
       if (encoded.status === 401 || encoded.status === 403) throw new OnesError("HUMAN_ACTION_REQUIRED", "ONES requires an authenticated visible browser session for attachment download");
       if (encoded.status === 429) throw this.rateLimited("attachment download was rate limited", encoded.retryAfter ?? null);
       if (encoded.status < 200 || encoded.status >= 300) throw new OnesError("SOURCE_FAILED", `attachment download returned ${encoded.status}`);
+      if (encoded.tooLarge) throw new OnesError("EXPORT_LIMIT_EXCEEDED", `attachment download exceeds the configured per-file limit of ${options?.maxBytes ?? 0} bytes`);
       return { attachment, bytes: Uint8Array.from(Buffer.from(encoded.base64, "base64")), ...(encoded.contentType ? { contentType: encoded.contentType } : {}) };
     }));
   }
@@ -180,47 +193,6 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
       if (authorization.authorized) return authorization;
     }
     return authorization;
-  }
-
-  /** 读取并按浏览器可见任务行补全当前用户工单树。 */
-  override async listMyOpen(ticketProfile: TicketProfile, limit: number): Promise<TicketIndexTree> {
-    const profile = this.profileFor(ticketProfile);
-    const index = await super.listMyOpen(ticketProfile, limit);
-    if (profile.source !== "browser") return index;
-
-    const existingMatches = index.items.filter((item) => item.matchedFilter === true);
-    if (!profile.browser?.myOpenViewUrl) {
-      return index;
-    }
-    const currentAssigneeIds = new Set(existingMatches.map((item) => item.assignee?.id).filter((id): id is string => Boolean(id)));
-    const currentAssigneeNames = new Set(existingMatches.map((item) => item.assignee?.displayName).filter((name): name is string => Boolean(name)));
-    if (currentAssigneeIds.size === 0) {
-      throw new OnesError("SOURCE_SCHEMA_CHANGED", "ONES list reconciliation could not identify the current user's assignee id");
-    }
-
-    const visibleRows = await this.visibleTaskRows(profile);
-    const knownIds = new Set(index.items.map((item) => item.id));
-    for (const { id, text: rowText } of visibleRows) {
-      if (knownIds.has(id)) continue;
-      if (currentAssigneeNames.size > 0 && ![...currentAssigneeNames].some((name) => rowText.includes(name))) continue;
-      const raw = await super.getRawTicket(ticketProfile, { id });
-      const assigneeId = text(asRecord(asRecord(raw.detail).assign).uuid);
-      if (!assigneeId || !currentAssigneeIds.has(assigneeId)) continue;
-      this.ticketCache.set(id, raw);
-      const item = this.normalizeIndexItem(profile, raw.detail);
-      item.matchedFilter = true;
-      item.includedAsAncestor = false;
-      index.items.push(item);
-      knownIds.add(id);
-    }
-    return this.rebuildTree(index);
-  }
-
-  /** 返回浏览器 reconciliation 期间缓存的原始详情，或回退到上游读取。 */
-  protected override async getRawTicket(ticketProfile: TicketProfile, reference: TicketReference): Promise<OnesRawTicketData> {
-    const cached = this.ticketCache.get(reference.id);
-    if (cached) return cached;
-    return super.getRawTicket(ticketProfile, reference);
   }
 
   /** 通过可见页面的同源 fetch 发送 ONES 请求，并维护 CSRF token。 */
@@ -284,8 +256,7 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
     }
     this.context = await this.browser.newContext();
     this.page = await this.context.newPage();
-    const startUrl = profile.browser?.myOpenViewUrl
-      ?? new URL(`/project/#/workspace/team/${encodeURIComponent(profile.teamId)}`, profile.baseUrl).toString();
+    const startUrl = new URL(`/project/#/workspace/team/${encodeURIComponent(profile.teamId)}`, profile.baseUrl).toString();
     await this.page.goto(startUrl, { waitUntil: "domcontentloaded" });
     // 先绑定会话，确保自动登录失败时仍可在此可见窗口手动完成登录。
     this.activeProfileName = profileName;
@@ -328,47 +299,9 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
     }
   }
 
-  /** 根据 ONES profile 对象反查其受控配置名称。 */
+  /** 由受控 ONES profile 对象反查配置名称，用于隔离单一临时浏览器会话。 */
   private profileName(profile: OnesProfile): string | undefined {
     return Object.entries(this.config.profiles).find(([, candidate]) => candidate === profile)?.[0];
   }
 
-  /** 读取当前用户视图中可见的工单路由行。 */
-  protected async visibleTaskRows(profile: OnesProfile): Promise<Array<{ id: string; text: string }>> {
-    const page = this.requireActivePage(profile);
-    await page.goto(profile.browser!.myOpenViewUrl!, { waitUntil: "domcontentloaded" });
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      const rows = await page.evaluate(() => Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/task/"]'))
-        .map((anchor) => ({ id: (anchor.getAttribute("href") ?? "").match(/\/task\/([^/?#]+)/)?.[1], text: anchor.innerText }))
-        .filter((row): row is { id: string; text: string } => Boolean(row.id)));
-      if (rows.length > 0) return [...new Map(rows.map((row) => [row.id, row])).values()];
-      await page.waitForTimeout(250);
-    }
-    throw new OnesError("HUMAN_ACTION_REQUIRED", "The supervised ONES view did not show task rows; complete sign-in and keep the configured my-open view available");
-  }
-
-  /** 根据新增或过滤后的索引项重新计算树根、父级和分页统计。 */
-  private rebuildTree(index: TicketIndexTree): TicketIndexTree {
-    const ids = new Set(index.items.map((item) => item.id));
-    const roots: string[] = [];
-    const externalParentIds: string[] = [];
-    for (const item of index.items) {
-      if (!item.parentId) roots.push(item.id);
-      else if (!ids.has(item.parentId)) externalParentIds.push(item.parentId);
-    }
-    const matchedCount = index.items.filter((item) => item.matchedFilter === true).length;
-    return {
-      ...index,
-      roots,
-      externalParentIds: [...new Set(externalParentIds)],
-      page: {
-        ...index.page,
-        count: index.items.length,
-        // ONES GraphQL 的 pageInfo.preciseCount 与返回行及已认证筛选视图均不一致。
-        // 对于受监督浏览器 profile，经校准的当前用户工单行才是权威结果。
-        matchedCount,
-        contextCount: index.items.length - matchedCount,
-      },
-    };
-  }
 }

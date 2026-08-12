@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import * as z from "zod/v4";
 import { TicketClass } from "../../modules/tickets/domain/ticket.js";
 import { TicketError } from "../../modules/tickets/domain/ticket-error.js";
+import { DEFAULT_TICKET_EXPORT_LIMITS } from "../../modules/tickets/domain/ticket-export.js";
 
 const classificationRuleSchema = z.object({
   name: z.string().min(1),
@@ -21,8 +22,6 @@ const profileSchema = z.object({
   teamId: z.string().min(1),
   allowedHosts: z.array(z.string().min(1)).min(1),
   allowedProjects: z.array(z.string().min(1)).default([]),
-  /** 仅用于列表展示的租户专属 importantField UUID。 */
-  listAssigneeFieldId: z.string().min(1).optional(),
   /** 保存已批准只读机器凭据的环境变量或密钥存储条目名称。 */
   secretRef: z.string().min(1).optional(),
   authentication: z
@@ -34,13 +33,10 @@ const profileSchema = z.object({
   requestBudget: z
     .object({ maxConcurrent: z.literal(1).default(1), maxRequestsPerMinute: z.number().int().min(1).max(120).default(20) })
     .default({ maxConcurrent: 1, maxRequestsPerMinute: 20 }),
-  defaultView: z.literal("my_open_tree").default("my_open_tree"),
   inlineMaxChars: z.number().int().min(1_000).max(100_000).default(12_000),
   classificationRules: z.array(classificationRuleSchema).default([]),
   browser: z.object({
     executablePath: z.string().min(1).optional(),
-    /** 受控 ONES 筛选视图 URL，仅用于校准浏览器可见的工单行。 */
-    myOpenViewUrl: z.url().optional(),
     /** 可选直登凭据，只能存放于本地且被 Git 忽略的配置文件。 */
     autoLogin: z.object({
       email: z.string().email(),
@@ -58,6 +54,18 @@ const profileSchema = z.object({
   }
 });
 
+const exportLimitsSchema = z.object({
+  /** 查询型导出默认只允许小批量；更大的范围应由调用方拆分。 */
+  maxItems: z.number().int().min(1).max(10_000).default(DEFAULT_TICKET_EXPORT_LIMITS.maxItems),
+  maxAttachments: z.number().int().min(1).max(100_000).default(DEFAULT_TICKET_EXPORT_LIMITS.maxAttachments),
+  maxAttachmentBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_TICKET_EXPORT_LIMITS.maxAttachmentBytes),
+  maxTotalBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_TICKET_EXPORT_LIMITS.maxTotalBytes),
+}).strict().superRefine((limits, context) => {
+  if (limits.maxAttachmentBytes > limits.maxTotalBytes) {
+    context.addIssue({ code: "custom", path: ["maxAttachmentBytes"], message: "maxAttachmentBytes cannot exceed maxTotalBytes" });
+  }
+});
+
 const configSchema = z.object({
   schemaVersion: z.literal("1.0"),
   storage: z.object({
@@ -66,6 +74,7 @@ const configSchema = z.object({
     redaction: z
       .object({ omitPeople: z.boolean().default(false), removeFields: z.array(z.string()).default(["phone", "email"]) })
       .default({ omitPeople: false, removeFields: ["phone", "email"] }),
+    exportLimits: exportLimitsSchema.default({ ...DEFAULT_TICKET_EXPORT_LIMITS }),
   }).strict(),
   profiles: z.record(z.string().min(1), profileSchema).refine((profiles) => Object.keys(profiles).length > 0, "At least one profile is required"),
 }).strict();
@@ -84,9 +93,6 @@ export function parseConfig(parsed: unknown): OnesConfig {
     const host = new URL(profile.baseUrl).host;
     if (!profile.allowedHosts.includes(host)) {
       throw new TicketError("CONFIG_INVALID", `baseUrl host ${host} is not in allowedHosts`);
-    }
-    if (profile.browser?.myOpenViewUrl && !profile.allowedHosts.includes(new URL(profile.browser.myOpenViewUrl).host)) {
-      throw new TicketError("CONFIG_INVALID", "browser.myOpenViewUrl host is not in allowedHosts");
     }
     if (profile.browser?.autoLogin?.loginUrl && !profile.allowedHosts.includes(new URL(profile.browser.autoLogin.loginUrl).host)) {
       throw new TicketError("CONFIG_INVALID", "browser.autoLogin.loginUrl host is not in allowedHosts");

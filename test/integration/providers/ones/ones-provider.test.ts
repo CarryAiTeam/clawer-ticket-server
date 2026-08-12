@@ -7,9 +7,10 @@ import { StaticTicketProfileResolver } from "../../../../src/config/static-ticke
 import { TicketApplication, projectTicketForInline } from "../../../../src/modules/tickets/application/ticket-application.js";
 import { OnesConfig, parseConfig } from "../../../../src/providers/ones/ones-config.js";
 import { HttpClient, HttpRequest, HttpResponse, parseJsonResponse } from "../../../../src/infrastructure/http/fetch-http-client.js";
-import { TicketIndexTree } from "../../../../src/modules/tickets/domain/ticket.js";
-import { TicketProfile, TicketProvider } from "../../../../src/modules/tickets/domain/ports.js";
-import { OnesGraphqlSource } from "../../../../src/providers/ones/ones-graphql-source.js";
+import { TicketSearchQuery } from "../../../../src/modules/tickets/domain/ticket.js";
+import { TicketError } from "../../../../src/modules/tickets/domain/ticket-error.js";
+import { TicketBundleStore, TicketProfile, TicketProvider } from "../../../../src/modules/tickets/domain/ports.js";
+import { compileOnesTicketSearchVariables, OnesGraphqlSource } from "../../../../src/providers/ones/ones-graphql-source.js";
 import { OnesBrowserSource } from "../../../../src/providers/ones/ones-browser-source.js";
 import { OnesRawTicketData } from "../../../../src/providers/ones/ones-contracts.js";
 import { normalizeOnesTicket } from "../../../../src/providers/ones/ones-ticket-mapper.js";
@@ -32,7 +33,6 @@ const config: OnesConfig = {
       secretRef: "ONES_TEST_TOKEN",
       authentication: { headerName: "Authorization", scheme: "Bearer" },
       requestBudget: { maxConcurrent: 1, maxRequestsPerMinute: 20 },
-      defaultView: "my_open_tree",
       inlineMaxChars: 12_000,
       classificationRules: [{ name: "tech", field: "issueType", equals: "技术故事", class: "technical-change" }],
     },
@@ -91,8 +91,11 @@ function createApplication(config: OnesConfig, provider: TicketProvider, bundleS
 class FakeProvider implements TicketProvider {
   readonly providerId = "ones";
   async status() { return { configured: true, authorized: true, diagnostics: ["fake"] }; }
-  async listMyOpen(): Promise<TicketIndexTree> {
-    return { view: "my_open_tree", items: [{ id: "task-1", title: "示例技术改造", status: "新建", childIds: [], matchedFilter: true, includedAsAncestor: false }], roots: ["task-1"], externalParentIds: [], page: { count: 1, matchedCount: 1, contextCount: 0, hasNextPage: false } };
+  async search() {
+    return {
+      items: [{ id: "task-1", title: "示例技术改造", assignee: { id: "user-1", displayName: "开发者" }, projectId: "project-demo" }],
+      page: { returned: 1, totalCount: 1, hasNextPage: false },
+    };
   }
   async getTicket(profile: TicketProfile) { return normalizeOnesTicket(config.profiles[profile.name]!, rawTicket); }
 }
@@ -109,10 +112,14 @@ class RecordingHttpClient implements HttpClient {
     this.requests.push(request);
     const body = request.body ?? "";
     if (request.url.pathname.endsWith("/items/graphql") && body.includes("buckets")) {
-      const parent = { uuid: "parent-1", key: "P-0", name: "父任务", parent: { uuid: "" }, subTasks: [{ uuid: "task-1" }], project: { uuid: "project-demo" }, status: { name: "新建" }, importantField: [], path: "parent-1" };
-      const child = { uuid: "task-1", key: "P-1", name: "标题", parent: { uuid: "parent-1" }, subTasks: [], project: { uuid: "project-demo" }, status: { name: "进行中" }, importantField: [], path: "parent-1-task-1" };
-      const tasks = body.includes("includeAncestors") ? [parent, child] : [child];
-      return response({ data: { buckets: [{ tasks, pageInfo: { count: tasks.length, totalCount: 1, preciseCount: 1, hasNextPage: false } }] } });
+      const payload = JSON.parse(body) as { variables?: { pagination?: { after?: string } } };
+      const after = payload.variables?.pagination?.after;
+      const task = after
+        ? { uuid: "task-2", key: "P-2", name: "续页标题", number: 2, project: { uuid: "project-demo" }, status: { uuid: "status-2", name: "进行中", category: "in_progress" }, assign: { uuid: "user-1", name: "开发者" } }
+        : { uuid: "task-1", key: "P-1", name: "标题", number: 1, project: { uuid: "project-demo" }, status: { uuid: "status-1", name: "未开始", category: "to_do" }, assign: { uuid: "user-1", name: "开发者" } };
+      return response({ data: { buckets: [{ tasks: [task], pageInfo: after
+        ? { count: 1, totalCount: 2, startCursor: "cursor-2", endCursor: "cursor-2", hasNextPage: false }
+        : { count: 1, totalCount: 2, startCursor: "cursor-1", endCursor: "cursor-1", hasNextPage: true } }] } });
     }
     if (request.url.pathname.endsWith("/items/graphql")) return this.rejectDetail ? response({ error: "detail rejected" }, 400) : response({ data: { task: rawTicket.detail } });
     if (request.url.pathname.endsWith("/messages")) return this.rejectRest ? response({ error: "messages rejected" }, 400) : response(rawTicket.messages);
@@ -148,43 +155,9 @@ class RetryOnceHttpClient extends RecordingHttpClient {
   }
 }
 
-class ReconciledBrowserSource extends OnesBrowserSource {
-  protected override async requestJson(_profile: OnesConfig["profiles"][string], _method: "GET" | "POST", path: string, body?: string): Promise<unknown> {
-    if (path.endsWith("items/graphql")) {
-      const payload = JSON.parse(body ?? "{}") as { query?: string; variables?: { key?: string } };
-      if (payload.query?.includes("buckets")) {
-        const parent = { uuid: "parent-browser", key: "P-0", name: "Parent", parent: {}, subTasks: [{ uuid: "listed-browser" }], project: { uuid: "project-demo" }, status: { name: "New" }, importantField: [] };
-        const listed = { uuid: "listed-browser", key: "P-1", name: "Listed", parent: { uuid: "parent-browser" }, subTasks: [], project: { uuid: "project-demo" }, status: { name: "Open" }, assign: { uuid: "current-user", name: "Current User" }, importantField: [] };
-        const tasks = payload.query.includes("includeAncestors") ? [parent, listed] : [listed];
-        return { data: { buckets: [{ tasks, pageInfo: { count: tasks.length, totalCount: 2, preciseCount: 0, hasNextPage: false } }] } };
-      }
-      const id = payload.variables?.key?.replace(/^task-/, "") ?? "unknown";
-      if (payload.query?.includes("TaskAttachments")) return { data: { task: { attachments: [] } } };
-      return {
-        data: {
-          task: {
-            uuid: id,
-            key: `task-${id}`,
-            name: id === "missing-browser" ? "Recovered from browser view" : "Listed",
-            project: { uuid: "project-demo", name: "Demo" },
-            status: { name: "Open" },
-            priority: { value: "Normal" },
-            assign: { uuid: "current-user", name: "Current User" },
-            owner: {}, issueType: {}, subIssueType: {}, sprint: {}, parent: {}, subTasks: [], relatedTasks: [], links: [], importantField: [],
-          },
-        },
-      };
-    }
-    if (path.endsWith("/messages")) return { messages: [] };
-    throw new Error(`Unexpected browser source path ${path}`);
-  }
-
-  protected override async visibleTaskRows(): Promise<Array<{ id: string; text: string }>> {
-    return [
-      { id: "parent-browser", text: "Other User Parent" },
-      { id: "listed-browser", text: "Current User Listed" },
-      { id: "missing-browser", text: "Current User Recovered" },
-    ];
+class MissingHasNextPageHttpClient implements HttpClient {
+  async request(): Promise<HttpResponse> {
+    return response({ data: { buckets: [{ tasks: [], pageInfo: { count: 0, totalCount: 0 } }] } });
   }
 }
 
@@ -294,11 +267,13 @@ try {
   const browserProfileConfig = JSON.parse(JSON.stringify(config)) as { profiles: Record<string, Record<string, unknown>> };
   browserProfileConfig.profiles.demo!.source = "browser";
   delete browserProfileConfig.profiles.demo!.secretRef;
-  browserProfileConfig.profiles.demo!.browser = { myOpenViewUrl: "https://tenant.example.test/project/#/workspace/team/team-demo/filter/view/my-open" };
+  browserProfileConfig.profiles.demo!.browser = {};
   assert.equal(parseConfig(browserProfileConfig).profiles.demo!.source, "browser");
+  const legacyTreeConfig = JSON.parse(JSON.stringify(browserProfileConfig)) as { profiles: Record<string, Record<string, unknown>> };
+  legacyTreeConfig.profiles.demo!.defaultView = "my_open_tree";
+  assert.throws(() => parseConfig(legacyTreeConfig), { name: "TicketError" }, "the removed tree-view configuration must not be accepted as a compatibility path");
   const autoLoginProfileConfig = JSON.parse(JSON.stringify(browserProfileConfig)) as { profiles: Record<string, Record<string, unknown>> };
   autoLoginProfileConfig.profiles.demo!.browser = {
-    myOpenViewUrl: "https://tenant.example.test/project/#/workspace/team/team-demo/filter/view/my-open",
     autoLogin: { email: "operator@example.test", password: "test-only-password", loginUrl: "https://tenant.example.test/login" },
   };
   const autoLoginConfig = parseConfig(autoLoginProfileConfig);
@@ -375,8 +350,6 @@ try {
   assert.equal(parseConfig(legacyProfileConfig).profiles.demo!.provider, "ones");
   const application = createApplication(config, new FakeProvider(), new LocalTicketBundleStore(root));
   assert.equal((await application.connectionStatus("demo")).provider, "ones");
-  const tree = await application.listMyOpen("demo", 50);
-  assert.equal(tree.items.length, 1);
   const ticket = await application.getTicket("demo", { id: "task-1" });
   assert.equal(ticket.classification.value, "technical-change");
   assert.equal(ticket.source.ticketNumber, "#209161");
@@ -407,25 +380,6 @@ try {
   );
   assert.equal(inlineTicket.inline.truncated, true);
   assert.ok(inlineTicket.inline.contentChars <= 20);
-  const detailedList = await application.listMyOpenDetails("demo", 50);
-  assert.equal(detailedList.detailCount, 1);
-  assert.equal(detailedList.tickets[0]?.title, "示例技术改造");
-  const batchPlan = await application.exportMyOpenTickets("demo", 50, "plan");
-  assert.equal(batchPlan.complete, true);
-  assert.equal(batchPlan.exports.length, 1);
-  const newOnlyPlan = await application.exportMyOpenTickets("demo", 50, "plan", "metadata", ["新建"]);
-  assert.equal(newOnlyPlan.selectedCount, 1);
-  const noMatchPlan = await application.exportMyOpenTickets("demo", 50, "plan", "metadata", ["进行中"]);
-  assert.equal(noMatchPlan.selectedCount, 0);
-
-  const reconciledBrowserConfig = parseConfig(browserProfileConfig);
-  const reconciledBrowserSource = new ReconciledBrowserSource(reconciledBrowserConfig);
-  const reconciledTree = await reconciledBrowserSource.listMyOpen(ticketProfile(reconciledBrowserConfig), 50);
-  assert.equal(reconciledTree.page.matchedCount, 2);
-  assert.equal(reconciledTree.items.filter((item) => item.matchedFilter === true).length, 2);
-  const reconciledDetails = await createApplication(reconciledBrowserConfig, reconciledBrowserSource, new LocalTicketBundleStore(root), reconciledBrowserSource).listMyOpenDetails("demo", 50);
-  assert.equal(reconciledDetails.detailCount, 2);
-  assert.ok(reconciledDetails.tickets.some((item) => item.source.ticketId === "missing-browser"));
 
   assert.throws(
     () => parseJsonResponse({ status: 302, headers: new Headers({ location: "https://outside.example.test" }), text: "" }),
@@ -447,6 +401,71 @@ try {
   const privateTicket = await privateApplication.getTicket("demo", { id: "task-1" });
   assert.equal(privateTicket.assignee, undefined);
   assert.equal(privateTicket.comments[0]?.author, undefined);
+  const privateSummary = await privateApplication.searchTickets({ profile: "demo", scope: "self", state: "open" });
+  assert.equal(privateSummary.items[0]?.assignee, undefined, "search summaries must honor omitPeople redaction");
+  const outOfScopeProvider: TicketProvider = {
+    providerId: "ones",
+    async status() { return { configured: true, authorized: true, diagnostics: [] }; },
+    async search() {
+      return {
+        items: [{ id: "outside-project-task", title: "Out of scope", projectId: "project-outside" }],
+        page: { returned: 1, totalCount: 1, hasNextPage: false },
+      };
+    },
+    async getTicket(profile) { return normalizeOnesTicket(config.profiles[profile.name]!, rawTicket); },
+  };
+  const outOfScopeApplication = createApplication(config, outOfScopeProvider, new LocalTicketBundleStore(root));
+  await assert.rejects(
+    () => outOfScopeApplication.searchTickets({ profile: "demo", scope: "project", state: "all" }),
+    { name: "TicketError", message: /outside the profile project allowlist/ },
+    "application search must retain the final project allowlist defense",
+  );
+  await assert.rejects(
+    () => outOfScopeApplication.exportTicketSearch("demo", { scope: "project", state: "all" }, "plan", "metadata"),
+    { name: "TicketError", message: /outside the profile project allowlist/ },
+    "query export must retain the same final project allowlist defense while enumerating pages",
+  );
+  let rejectSecondDetail = false;
+  let queryWriteSessions = 0;
+  const detailFailureProvider: TicketProvider = {
+    providerId: "ones",
+    async status() { return { configured: true, authorized: true, diagnostics: [] }; },
+    async search() {
+      return {
+        items: [
+          { id: "query-task-1", title: "First", projectId: "project-demo" },
+          { id: "query-task-2", title: "Second", projectId: "project-demo" },
+        ],
+        page: { returned: 2, totalCount: 2, hasNextPage: false },
+      };
+    },
+    async getTicket(profile, reference) {
+      if (rejectSecondDetail && reference.id === "query-task-2") throw new Error("second query detail failed");
+      const normalized = normalizeOnesTicket(config.profiles[profile.name]!, rawTicket);
+      return { ...normalized, source: { ...normalized.source, ticketId: reference.id } };
+    },
+  };
+  const queryBundleStore: TicketBundleStore = {
+    async plan(ticket) { return { directory: `D:/query-plans/${ticket.source.ticketId}`, files: [], contentHash: ticket.source.ticketId, action: "created" }; },
+    async beginExport(ticket) {
+      queryWriteSessions += 1;
+      return {
+        missingMedia: [],
+        async writeMedia() {},
+        async commit() { return { directory: `D:/query-plans/${ticket.source.ticketId}`, files: [], contentHash: ticket.source.ticketId, action: "created" as const, exportId: ticket.source.ticketId, status: "created" as const }; },
+        async abort() {},
+      };
+    },
+  };
+  const detailFailureApplication = createApplication(config, detailFailureProvider, queryBundleStore);
+  const frozenQueryPlan = await detailFailureApplication.exportTicketSearch("demo", { scope: "project", state: "all" }, "plan", "metadata");
+  assert.equal(frozenQueryPlan.selectedCount, 2);
+  rejectSecondDetail = true;
+  const partialQueryWrite = await detailFailureApplication.exportTicketSearch("demo", { scope: "project", state: "all" }, "write", "metadata", frozenQueryPlan.selection);
+  assert.equal(partialQueryWrite.complete, false, "streamed query writes must report an incomplete batch instead of hiding completed work");
+  assert.equal(partialQueryWrite.completedCount, 1);
+  assert.deepEqual(partialQueryWrite.failedTickets, [{ ticketId: "query-task-2", code: "UNEXPECTED", message: "Ticket export failed unexpectedly" }]);
+  assert.equal(queryWriteSessions, 1, "a streamed query write must write completed tickets without keeping later details in memory");
 
   const plan = await application.exportTicket("demo", { id: "task-1" }, "plan", "metadata");
   assert.equal(plan.action, "created");
@@ -508,6 +527,25 @@ try {
   });
   const mediaPlan = await mediaApplication.exportTicket("demo", { id: "task-1" }, "plan");
   assert.ok(mediaPlan.files.some((file) => file.path === "assets/description/attachment-1-a.png"));
+  assert.equal(mediaPlan.budget.plannedMedia.plannedCount, 1);
+  assert.equal(mediaPlan.budget.plannedMedia.knownBytes, 12);
+  const constrainedApplication = new TicketApplication({
+    profiles: new StaticTicketProfileResolver([{ name: "demo", providerId: "ones", connector: "graphql", allowedProjects: ["project-demo"], inlineMaxChars: 12_000 }]),
+    provider: new FakeProvider(),
+    bundleStore: new LocalTicketBundleStore(join(root, "constrained-export")),
+    redaction: config.storage.redaction,
+    exportLimits: { maxAttachmentBytes: 10, maxTotalBytes: 10 },
+  });
+  await assert.rejects(() => constrainedApplication.exportTicket("demo", { id: "task-1" }, "plan"), (error: unknown) => error instanceof TicketError && error.code === "EXPORT_LIMIT_EXCEEDED");
+  const actualBytesApplication = new TicketApplication({
+    profiles: new StaticTicketProfileResolver([{ name: "demo", providerId: "ones", connector: "graphql", allowedProjects: ["project-demo"], inlineMaxChars: 12_000 }]),
+    provider: new FakeProvider(),
+    bundleStore: new LocalTicketBundleStore(join(root, "actual-bytes-limit")),
+    redaction: config.storage.redaction,
+    exportLimits: { maxAttachmentBytes: 12, maxTotalBytes: 12 },
+    mediaProvider: { async downloadAttachment(_profile, attachment, options) { assert.equal(options?.maxBytes, 12); return { attachment, bytes: new Uint8Array(13), contentType: "image/png" }; } },
+  });
+  await assert.rejects(() => actualBytesApplication.exportTicket("demo", { id: "task-1" }, "write"), (error: unknown) => error instanceof TicketError && error.code === "EXPORT_LIMIT_EXCEEDED");
   const mediaWrite = await mediaApplication.exportTicket("demo", { id: "task-1" }, "write");
   assert.ok("status" in mediaWrite);
   assert.equal(mediaDownloadCount, 1);
@@ -568,9 +606,17 @@ try {
   const sequentialProvider: TicketProvider = {
     providerId: "ones",
     async status() { return { configured: true, authorized: true, diagnostics: [] }; },
-    async listMyOpen() { return { view: "my_open_tree", items: [{ id: "task-1", status: "新建", title: "示例技术改造", childIds: [], matchedFilter: true as const, includedAsAncestor: false }], roots: ["task-1"], externalParentIds: [], page: { count: 1, matchedCount: 1, contextCount: 0, hasNextPage: false } }; },
+    async search() { return { items: [{ id: "task-1", title: "示例技术改造", projectId: "project-demo" }], page: { returned: 1, totalCount: 1, hasNextPage: false } }; },
     async getTicket() { return sequentialTicket; },
   };
+  const totalBudgetApplication = new TicketApplication({
+    profiles: new StaticTicketProfileResolver([{ name: "demo", providerId: "ones", connector: "graphql", allowedProjects: ["project-demo"], inlineMaxChars: 12_000 }]),
+    provider: sequentialProvider,
+    bundleStore: new LocalTicketBundleStore(join(root, "total-media-limit")),
+    redaction: config.storage.redaction,
+    exportLimits: { maxAttachmentBytes: 12, maxTotalBytes: 13 },
+  });
+  await assert.rejects(() => totalBudgetApplication.exportTicket("demo", { id: "task-1" }, "plan"), (error: unknown) => error instanceof TicketError && error.code === "EXPORT_LIMIT_EXCEEDED");
   const sequentialApplication = new TicketApplication({
     profiles: new StaticTicketProfileResolver([{ name: "demo", providerId: "ones", connector: "graphql", allowedProjects: ["project-demo"], inlineMaxChars: 12_000 }]),
     provider: sequentialProvider,
@@ -618,20 +664,51 @@ try {
 
   const http = new RecordingHttpClient();
   const graphql = new OnesGraphqlSource(config, new StaticSecretProvider(), http);
-  const graphTree = await graphql.listMyOpen(ticketProfile(config), 10);
-  assert.equal(graphTree.view, "my_open_tree");
-  assert.equal(graphTree.page.count, 2);
-  assert.equal(graphTree.page.matchedCount, 1);
-  assert.equal(graphTree.page.contextCount, 1);
-  assert.equal(graphTree.items.find((item) => item.id === "parent-1")?.includedAsAncestor, true);
-  assert.equal(graphTree.items.find((item) => item.id === "task-1")?.matchedFilter, true);
+  const graphSearchQuery: TicketSearchQuery = {
+    scope: "self",
+    state: "open",
+    filter: { all: [{ field: "statusCategory", op: "notIn", values: ["done"] }, { field: "assignee", op: "in", values: ["me"] }] },
+    sort: { field: "createTime", direction: "desc" },
+    page: { size: 50 },
+  };
+  const fixtureDirectory = join(process.cwd(), ".cloudpivot-cli", "task-runs", "ticket-tool-surface-design");
+  const readFixture = async (file: string) => JSON.parse(await readFile(join(fixtureDirectory, file), "utf8")) as { query: string; variables: Record<string, unknown> };
+  const profileWithoutProjectConstraint = { ...config.profiles.demo!, allowedProjects: [] };
+  const myOpenFixture = await readFixture("ones-items-graphql-my-open-status-category-not-in-done-assignee-me.request.json");
+  assert.match(myOpenFixture.query, /pageInfo[\s\S]*hasNextPage/, "the archived real request must retain the observed pageInfo fields");
+  assert.deepEqual(
+    compileOnesTicketSearchVariables(profileWithoutProjectConstraint, graphSearchQuery),
+    myOpenFixture.variables,
+    "self/open compilation must match the archived real ONES request variables when no profile project constraint is added",
+  );
+  const lazyLoadFixture = await readFixture("ones-items-graphql-lazy-load-after-status-not-in-assignee-not-in-me.request.json");
+  const lazyPagination = lazyLoadFixture.variables.pagination as { limit: number; after: string; preciseCount?: unknown };
+  assert.equal(lazyPagination.limit, 50);
+  assert.equal(typeof lazyPagination.after, "string");
+  assert.equal("preciseCount" in lazyPagination, false, "the archived continuation request omits preciseCount");
+  assert.deepEqual(
+    compileOnesTicketSearchVariables(profileWithoutProjectConstraint, { ...graphSearchQuery, page: { size: 50, after: lazyPagination.after } }).pagination,
+    lazyPagination,
+    "a continuation must compile the archived after shape without reintroducing preciseCount",
+  );
+  const projectFixture = await readFixture("ones-items-graphql-project-field-in-assignee-in-redacted.request.json");
+  const projectFixtureFilter = (projectFixture.variables.filterGroup as Array<Record<string, unknown>>)[0];
+  assert.ok(projectFixtureFilter && "_CFcrFX1y_in" in projectFixtureFilter, "the archived project filter stays evidence for a deferred capability, not a public V1 filter");
+  const firstProviderSearch = await graphql.search(ticketProfile(config), graphSearchQuery);
+  assert.equal(firstProviderSearch.page.returned, 1);
+  assert.equal(firstProviderSearch.page.totalCount, 2);
+  assert.equal(firstProviderSearch.page.hasNextPage, true);
+  assert.equal(firstProviderSearch.page.endCursor, "cursor-1");
+  const secondProviderSearch = await graphql.search(ticketProfile(config), { ...graphSearchQuery, page: { size: 50, after: firstProviderSearch.page.endCursor } });
+  assert.equal(secondProviderSearch.page.returned, 1);
+  assert.equal(secondProviderSearch.page.hasNextPage, false);
+  assert.equal(JSON.parse(http.requests[1]!.body!).variables.pagination.after, "cursor-1", "ONES endCursor must become the next request after");
+  assert.ok(!http.requests[0]?.body?.includes("includeAncestors"));
   const providerTicket = await graphql.getTicket(ticketProfile(config), { id: "uuid-1" });
   assert.equal(providerTicket.source.provider, "ones");
   assert.equal(providerTicket.source.ticketId, "task-1");
   assert.equal(http.requests.length, 5);
   assert.ok(http.requests[0]?.body?.includes("assign_in"));
-  assert.ok(http.requests[0]?.body?.includes("includeAncestors"));
-  assert.ok(!http.requests[1]?.body?.includes("includeAncestors"));
   assert.equal(http.requests[0]?.headers.Authorization, "Bearer test-token");
   assert.ok(http.requests.some((request) => request.url.pathname.endsWith("/messages")));
   assert.ok(!http.requests.some((request) => request.url.pathname.includes("/attachments")));
@@ -640,6 +717,63 @@ try {
   assert.equal(JSON.parse(detailRequest!.body!).variables.key, "task-uuid-1");
   assert.equal(JSON.parse(attachmentRequest!.body!).variables.key, "task-uuid-1");
   assert.ok(!http.requests.some((request) => request.url.search.includes("since=0")));
+
+  const missingPageInfoSource = new OnesGraphqlSource(config, new StaticSecretProvider(), new MissingHasNextPageHttpClient());
+  await assert.rejects(
+    () => missingPageInfoSource.search(ticketProfile(config), graphSearchQuery),
+    { name: "TicketError", message: /continuation flag/ },
+    "missing pageInfo.hasNextPage must fail closed instead of truncating results",
+  );
+
+  const searchQuery: TicketSearchQuery = {
+    scope: "self",
+    state: "active",
+    filter: {
+      all: [
+        { field: "title", op: "contains", value: "111" },
+        { field: "issueType", op: "in", values: ["WjULPrZa"] },
+        { field: "statusCategory", op: "in", values: ["to_do", "in_progress"] },
+        { field: "assignee", op: "in", values: ["me"] },
+      ],
+    },
+    sort: { field: "createTime", direction: "desc" },
+    page: { size: 50 },
+  };
+  const titleFixture = await readFixture("ones-items-graphql-title-match-issue-type-status-category-in-assignee-me.request.json");
+  assert.deepEqual(
+    compileOnesTicketSearchVariables(profileWithoutProjectConstraint, searchQuery),
+    titleFixture.variables,
+    "title, issue type, status category, and current-user compilation must match the archived real request variables",
+  );
+  assert.deepEqual(compileOnesTicketSearchVariables(config.profiles.demo!, searchQuery), {
+    groupBy: { tasks: {} },
+    groupOrderBy: null,
+    orderBy: { createTime: "DESC" },
+    filterGroup: [{
+      name_match: "111",
+      issueType_in: ["WjULPrZa"],
+      statusCategory_in: ["to_do", "in_progress"],
+      assign_in: ["$currentUser"],
+      project_in: ["project-demo"],
+    }],
+    search: null,
+    pagination: { limit: 50, preciseCount: false },
+  }, "the ONES adapter must compile only the frozen flat v1 variables");
+  assert.deepEqual(compileOnesTicketSearchVariables(config.profiles.demo!, { ...searchQuery, page: { size: 50, after: "internal-after" } }).pagination, { limit: 50, after: "internal-after" });
+  const providerSearch = await graphql.search(ticketProfile(config), searchQuery);
+  assert.equal(providerSearch.page.totalCount, 2, "flat search preserves the matching total rather than the current page count");
+  assert.equal(providerSearch.page.returned, 1);
+  const searchRequest = http.requests.at(-1);
+  const searchVariables = JSON.parse(searchRequest!.body!).variables;
+  assert.deepEqual(searchVariables.filterGroup[0], {
+    name_match: "111",
+    issueType_in: ["WjULPrZa"],
+    statusCategory_in: ["to_do", "in_progress"],
+    assign_in: ["$currentUser"],
+    project_in: ["project-demo"],
+  });
+  assert.equal(searchVariables.pagination.preciseCount, false);
+  assert.ok(!searchRequest!.body!.includes("includeAncestors"), "ticket_search must not request legacy tree context rows");
 
   const fallbackHttp = new RecordingHttpClient(true);
   const fallbackSource = new OnesGraphqlSource(config, new StaticSecretProvider(), fallbackHttp);
@@ -660,16 +794,17 @@ try {
 
   const constrainedConfig: OnesConfig = { ...config, profiles: { demo: { ...config.profiles.demo!, requestBudget: { maxConcurrent: 1, maxRequestsPerMinute: 2 } } } };
   const constrainedSource = new ControlledClockSource(constrainedConfig, new StaticSecretProvider(), new RecordingHttpClient());
-  await constrainedSource.listMyOpen(ticketProfile(constrainedConfig), 1);
-  await constrainedSource.listMyOpen(ticketProfile(constrainedConfig), 1);
+  await constrainedSource.search(ticketProfile(constrainedConfig), graphSearchQuery);
+  await constrainedSource.search(ticketProfile(constrainedConfig), graphSearchQuery);
+  await constrainedSource.search(ticketProfile(constrainedConfig), graphSearchQuery);
   assert.equal(constrainedSource.waits.length, 1);
   assert.ok(constrainedSource.waits[0]! >= 60_000);
 
   const retryHttp = new RetryOnceHttpClient();
   const retrySource = new ControlledClockSource(config, new StaticSecretProvider(), retryHttp);
-  await retrySource.listMyOpen(ticketProfile(config), 1);
+  await retrySource.search(ticketProfile(config), graphSearchQuery);
   assert.deepEqual(retrySource.waits, [2_000]);
-  assert.equal(retryHttp.requests.length, 3);
+  assert.equal(retryHttp.requests.length, 2);
 
   console.log("ONES MCP unit and integration tests passed.");
 } finally {
