@@ -1,6 +1,7 @@
 import {
   CanonicalTicket,
   InlineTicket,
+  TicketExportSearchInput,
   TicketReference,
   TicketSearchInput,
   TicketSearchProviderPage,
@@ -26,7 +27,9 @@ import { BrowserSessionProvider, ExportPlan, ExportResult, TicketBundleStore, Ti
 import { redactTicket, redactTicketSummary, TicketRedactionPolicy } from "../domain/ticket-policy.js";
 import {
   normalizeTicketSearchInput,
+  normalizeTicketExportSearchInput,
   TicketSearchCursorStore,
+  ticketExportSearchFingerprint,
   ticketSearchFingerprint,
   ticketSelectionFingerprint,
   validateSelection,
@@ -262,7 +265,7 @@ export class TicketApplication {
    */
   async exportTicketSearch(
     profile: string | undefined,
-    input: TicketSearchInput,
+    input: TicketExportSearchInput,
     mode: "plan" | "write",
     mediaMode: TicketMediaMode = "download",
     selection?: TicketSearchSelection,
@@ -271,9 +274,12 @@ export class TicketApplication {
     if (input.page !== undefined) {
       throw new TicketError("QUERY_INVALID", "ticket_export query does not accept page; it always enumerates the complete selection");
     }
-    const resolved = this.resolveSearch({ ...input, ...(profile ? { profile } : {}) });
+    const resolved = this.resolveExportSearch({ ...input, ...(profile ? { profile } : {}) });
     if (resolved.cursor) throw new TicketError("QUERY_INVALID", "ticket_export query does not accept page.cursor");
-    const summaries = await this.enumerateSearch(resolved.profile, resolved.query);
+    const enumerated = await this.enumerateSearch(resolved.profile, resolved.query);
+    const summaries = resolved.statuses.length === 0
+      ? enumerated
+      : enumerated.filter((item) => item.status?.name !== undefined && resolved.statuses.includes(item.status.name));
     const frozenSelection = {
       expectedCount: summaries.length,
       fingerprint: ticketSelectionFingerprint(resolved.fingerprint, summaries.map((item) => item.id)),
@@ -547,6 +553,17 @@ export class TicketApplication {
   private mediaProvider(): TicketMediaProvider {
     if (!this.dependencies.mediaProvider) throw new TicketError("CONFIG_INVALID", "The configured ticket source does not support controlled media downloads");
     return this.dependencies.mediaProvider;
+  }
+
+  /** 导出在搜索规范化后附加展示状态名，并将其绑定到冻结选择。 */
+  private resolveExportSearch(input: TicketExportSearchInput) {
+    const normalized = normalizeTicketExportSearchInput(input);
+    const profile = this.profile(normalized.profile);
+    if (normalized.query.scope === "project" && profile.allowedProjects.length === 0) {
+      throw new TicketError("SOURCE_NOT_ALLOWED", "Project-scope search requires a non-empty profile project allowlist");
+    }
+    const fingerprint = ticketExportSearchFingerprint(profile.name, normalized.query, normalized.statuses);
+    return { profile, query: normalized.query, statuses: normalized.statuses, fingerprint, cursor: normalized.cursor };
   }
 
   private isAuthorizationError(error: unknown): boolean {

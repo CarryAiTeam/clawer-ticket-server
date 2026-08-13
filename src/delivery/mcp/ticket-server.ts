@@ -33,6 +33,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
   const searchScopeSchema = z.enum(["self", "project"]).describe("Ticket ownership scope. Defaults to self; use project only when the user explicitly requests all people or the whole project.");
   const searchStateSchema = z.enum(["open", "active", "done", "all"]).describe("Ticket status scope. Defaults to open; all includes completed tickets.");
   const searchQuerySchema = z.object({ scope: searchScopeSchema.optional(), state: searchStateSchema.optional(), where: searchWhereSchema.optional() }).strict();
+  const ticketExportQuerySchema = searchQuerySchema.extend({ statuses: z.array(z.string().min(1).max(128)).min(1).max(20).optional().describe("Exact ONES display status names to include during query export, for example [\"新建\"]") }).strict();
   const invalidSearchInput = Symbol("invalid-ticket-search-input");
   const invalidTicketExportInput = Symbol("invalid-ticket-export-input");
   const ticketSearchInputSchema = z.object({
@@ -125,7 +126,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
   const ticketExportInputSchema = z.object({
     profile: profileSchema,
     ticket: ticketSchema.optional(),
-    query: searchQuerySchema.optional(),
+    query: ticketExportQuerySchema.optional(),
     selection: z.object({ expectedCount: z.number().int().min(0), fingerprint: z.string().regex(/^[a-f0-9]{64}$/i) }).strict().optional(),
     mode: z.enum(["plan", "write"]).default("write").describe("write commits a local bundle immediately; use plan only when the caller explicitly requests a preview"),
     media: z.enum(["metadata", "download"]).default("download").describe("download includes attachment-backed images and binaries during write; metadata writes no binary media"),
@@ -153,7 +154,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_export",
     {
       title: "Export a ticket work item",
-      description: "Local export for 获取、下载到本地、导出或保存到本地. It fetches complete normalized details including comments and attachment-backed images. Defaults to mode=write with media=download for a direct local export; use mode=plan only when the caller explicitly requests a preview. Query writes with a selection returned by a prior plan validate that frozen selection; direct query writes export the current matching selection in one call. Item/media budgets are enforced and results include completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
+      description: "Local export for 获取、下载到本地、导出或保存到本地. It fetches complete normalized details including comments and attachment-backed images. Query.statuses accepts exact ONES display status names such as 新建; query writes export the complete matching selection in one call. Defaults to mode=write with media=download for a direct local export; use mode=plan only when the caller explicitly requests a preview. Query writes with a selection returned by a prior plan validate that frozen selection. Item/media budgets are enforced and results include completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
       inputSchema: ticketExportInputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },

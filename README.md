@@ -27,10 +27,10 @@ Skill 源文件位于 `skills/ones-ticket-mcp/`。它是随 npm 包发布的版�
 
 - “查看、查阅、查询、列出 ONES 工单”只调用 `ticket_search`，默认是当前用户负责且未完成的列表。
 - “查看详情、查阅某工单详情”调用 `ticket_get`，不落盘、不下载二进制媒体。
-- “获取、下载到本地、导出、保存到本地、获取到本地”调用 `ticket_export` 并直接写入；只有同一请求明确说计划、预览或先看看导出范围时才返回 `plan`。
+- “获取、下载到本地、导出、保存到本地、获取到本地”调用 `ticket_export`，一次完整写入详情、图片和附件；只有同一请求明确说计划、预览或先看看导出范围时才返回 `plan`。
 - 用户给出 `209488` 这类纯数字工单号时，Skill 会先自动搜索并精确匹配 `number`，再用服务端返回的内部 `id` 读取详情。
 
-“获取/到本地/下载/导出/保存”优先级高于“查看”；裸“获取”会触发完整本地写入。
+“下载/导出/保存”优先级高于“查看”；“获取”会按其查询条件下载完整本地内容。
 
 ## 搜索
 
@@ -40,7 +40,7 @@ Skill 源文件位于 `skills/ones-ticket-mcp/`。它是随 npm 包发布的版�
 - `state`：`open`（默认，状态类型不包含 `done`）、`active`、`done` 或 `all`（包含已完成）。
 - 筛选字段包括标题包含、工作项类型稳定 ID 和状态类型 `in/notIn`；`scope: "self"` 由服务端自动加入当前负责人条件。
 
-因此“获取 ONES 工单”“获取我的待办”“获取我未完成的工单”均为 `scope: "self", state: "open"`；“获取所有 ONES”“获取 ONES 所有工单”均为 `scope: "self", state: "all"`。只有“所有人的、全员、整个项目”等明确范围词才使用 `scope: "project"`。
+因此“获取 ONES 工单”“获取我的待办”“获取我未完成的工单”使用 `scope: "self", state: "open"` 查询导出；“获取所有 ONES”“获取 ONES 所有工单”使用 `scope: "self", state: "all"` 查询导出。具体状态名称（如“新建”）写入导出查询的 `statuses`；只有“所有人的、全员、整个项目”等明确范围词才使用 `scope: "project"`。
 
 示例：
 
@@ -64,7 +64,7 @@ Skill 源文件位于 `skills/ones-ticket-mcp/`。它是随 npm 包发布的版�
 
 单张导出传 `ticket`；查询导出传与 `ticket_search` 相同的 `query`（query 不含 `page`）。
 
-“获取工单”与明确下载时，调用 \`ticket_export({ query, mode: "write", media: "download" })\`，得到包含附件和图片的完整本地副本；省略两个字段时服务端也默认如此。服务在同一调用中冻结该选择，并逐张原子写入，不会把全部详情保留在内存中。只说“查看、查阅、查询、列出”时使用只读工具。
+“获取工单”调用 `ticket_export({ query, mode: "write", media: "download" })`，得到包含附件和图片的完整本地副本；具体状态名称可传 `query.statuses`。服务在同一调用中冻结选择，并逐张原子写入，不会把全部详情保留在内存中。只说“查看、查阅、查询、列出”时使用只读工具。
 
 只有用户明确要求预览时，才调用 \`ticket_export({ query, mode: "plan" })\`。计划会返回 \`selection\`，后续“按刚才计划导出”需将完全相同的查询、\`selection\` 与 media 回传给 \`mode: "write"\`；数量或有序 ID 集合变化时返回 \`SELECTION_CHANGED\`，不会静默扩大写入范围。\`media: "metadata"\` 是用户明确要求“不要附件/图片、仅元数据”时的降级选项，不能用于普通“获取”。
 

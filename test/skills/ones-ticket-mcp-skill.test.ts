@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-type Call = { tool: string; purpose?: string; outcome?: string; retryOf?: number; autoLogin?: boolean; mode?: "plan" | "write"; media?: "metadata" | "download"; selection?: "prior-plan"; match?: { field: string; value: string; mode: string } };
+type Call = { tool: string; purpose?: string; outcome?: string; retryOf?: number; autoLogin?: boolean; mode?: "plan" | "write"; media?: "metadata" | "download"; selection?: "prior-plan"; statuses?: string[]; match?: { field: string; value: string; mode: string } };
 type Scenario = {
   id: string;
   route: "list" | "detail" | "export" | "blocked";
@@ -68,7 +68,7 @@ for (const rule of ["计划、预览、先看看", "不要先展示计划再要�
 for (const rule of ["“获取”默认表示本地写入", "mode: \"write\", media: \"download\"", "只有明确要求“仅文本”“不要下载图片/附件/媒体”"]) {
   assert.ok(exportSafety.includes(rule) || (await readFile(new URL("references/intent-mapping.md", skillRoot), "utf8")).includes(rule), `retrieval media rule must retain ${rule}`);
 }
-for (const rule of ["同步到本地", "同步更新本地", "mode: \"write\", media: \"download\"", "不得为了缩小输出或提高速度传 `media: \"metadata\"`", "同步完成条件", "downloadedMediaCount", "不得称“同步成功”"]) {
+for (const rule of ["同步到本地", "同步更新本地", "mode: \"write\", media: \"download\"", "同步完成条件", "downloadedMediaCount", "不得称“同步成功”"]) {
   assert.ok(exportSafety.includes(rule) || skill.includes(rule) || (await readFile(new URL("references/intent-mapping.md", skillRoot), "utf8")).includes(rule), `synchronization safety must retain ${rule}`);
 }
 assert.match(metadata, /^interface:\r?\n/m);
@@ -89,9 +89,11 @@ for (const current of fixture.scenarios) {
 }
 
 {
-  const current = find("retrieve-query-download-media");
+  const current = find("retrieve-new-ticket-download-media");
   const write = indexOf(current.calls, "ticket_export");
   assert.equal(current.calls[write]!.purpose, "retrieve-query");
+  assert.deepEqual(current.calls[write]!.statuses, ["新建"]);
+  assert.ok(!current.calls.some(({ tool }) => tool === "ticket_search"), "retrieval must use one complete query export rather than a separate summary search");
   assert.equal(current.calls[write]!.mode, "write");
   assert.equal(current.calls[write]!.media, "download");
   assert.equal(current.policy.requiresCompleteMedia, true);

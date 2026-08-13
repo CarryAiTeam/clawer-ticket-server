@@ -2,11 +2,11 @@
   "version": 3,
   "scenarios": [
     {
-      "id": "retrieve-query-download-media",
+      "id": "retrieve-new-ticket-download-media",
       "route": "export",
-      "request": "获取我的 ONES 工单",
+      "request": "获取 ONES 新建工单",
       "calls": [
-        { "tool": "ticket_export", "purpose": "retrieve-query", "mode": "write", "media": "download" },
+        { "tool": "ticket_export", "purpose": "retrieve-query", "mode": "write", "media": "download", "statuses": ["新建"] },
         { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
       ],
       "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "direct-write", "media": "download", "requiresCompleteMedia": true }

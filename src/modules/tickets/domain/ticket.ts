@@ -130,6 +130,11 @@ export interface TicketSearchInput {
   page?: { size?: number; cursor?: string };
 }
 
+/** 查询型导出的输入。展示状态名只用于完整枚举后的导出筛选，不影响列表分页契约。 */
+export interface TicketExportSearchInput extends TicketSearchInput {
+  statuses?: string[];
+}
+
 /** 应用层已验证的 provider-neutral 查询，不含公开 cursor 或 ONES variables。 */
 export interface TicketSearchQuery {
   scope: TicketSearchScope;

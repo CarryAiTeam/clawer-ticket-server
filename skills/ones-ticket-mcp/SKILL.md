@@ -15,7 +15,7 @@ description: 当用户获取、查询、查看列表、读取详情、分页、�
 | --- | --- | --- |
 | 查看、查阅、查询、列出工单 | `ticket_search` | 只读列表；默认 `scope: "self"`、`state: "open"` |
 | 查看/读取某工单详情 | `ticket_get` | 只读详情、评论与附件元数据，不落盘 |
-| 获取、下载到本地、导出、保存 | `ticket_export` | 默认完整副本：`mode: "write", media: "download"`；仅明确预览才用 `mode: "plan"`，仅明确不要媒体才用 `media: "metadata"` |
+| 获取、下载到本地、导出、保存 | `ticket_export` | 查询导出在一次调用中完整下载详情、图片和附件：`mode: "write", media: "download"`；用户说的展示状态（如“新建”）写入 `query.statuses`；仅明确预览才用 `mode: "plan"`，仅明确不要媒体才用 `media: "metadata"` |
 
 ## 固定执行顺序
 
@@ -37,7 +37,7 @@ Compatibility lifecycle notation: `normalize profile/ref → execute intended ca
 
 | 参考文件 | 读取条件 |
 | --- | --- |
-| [intent-mapping.md](references/intent-mapping.md) | 中文范围/状态、获取与只读边界无法直接判断时 |
+| [intent-mapping.md](references/intent-mapping.md) | 中文范围、状态或获取与只读边界无法直接判断时 |
 | [query-contract.md](references/query-contract.md) | 构造 `where`、分页 cursor、数字工单号或项目白名单时 |
 | [export-safety.md](references/export-safety.md) | 用户提出获取/下载/导出/保存，或需要执行 `plan → write` 时 |
 | [errors.md](references/errors.md) | 需要解释 MCP 稳定错误码或恢复步骤时 |
