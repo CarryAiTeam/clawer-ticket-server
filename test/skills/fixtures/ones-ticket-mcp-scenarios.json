@@ -1,6 +1,46 @@
 {
-  "version": 2,
+  "version": 3,
   "scenarios": [
+    {
+      "id": "retrieve-new-ticket-download-media",
+      "route": "export",
+      "request": "获取 ONES 新建工单",
+      "calls": [
+        { "tool": "ticket_export", "purpose": "retrieve-query", "mode": "write", "media": "download", "statuses": ["新建"] },
+        { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
+      ],
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "direct-write", "media": "download", "requiresCompleteMedia": true }
+    },
+    {
+      "id": "retrieve-numeric-ticket-download-media",
+      "route": "export",
+      "request": "获取 209488 工单",
+      "calls": [
+        { "tool": "ticket_search", "purpose": "resolve-number", "match": { "field": "number", "value": "209488", "mode": "exact" } },
+        { "tool": "ticket_export", "purpose": "retrieve-resolved-ticket", "mode": "write", "media": "download" },
+        { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
+      ],
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "direct-write", "media": "download", "requiresCompleteMedia": true }
+    },
+    {
+      "id": "explicit-metadata-export",
+      "route": "export",
+      "request": "获取我的工单，但不要下载附件和图片，只要元数据",
+      "calls": [
+        { "tool": "ticket_export", "purpose": "explicit-metadata", "mode": "write", "media": "metadata" },
+        { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
+      ],
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "direct-write", "media": "metadata" }
+    },
+    {
+      "id": "sync-local-download-media",
+      "route": "export",
+      "calls": [
+        { "tool": "ticket_export", "purpose": "sync-local", "mode": "write", "media": "download" },
+        { "tool": "ticket_browser_disconnect", "purpose": "cleanup" }
+      ],
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "direct-write", "media": "download", "requiresCompleteMedia": true }
+    },
     {
       "id": "ready-numeric-detail",
       "route": "detail",
@@ -52,7 +92,7 @@
       "route": "export",
       "request": "导出工单到本地，但先看看计划",
       "calls": [
-        { "tool": "ticket_export", "purpose": "plan", "mode": "plan" },
+        { "tool": "ticket_export", "purpose": "plan", "mode": "plan", "media": "download" },
         { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
       ],
       "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "plan-only" }
@@ -62,7 +102,7 @@
       "route": "export",
       "request": "把这六个工单下载到本地",
       "calls": [
-        { "tool": "ticket_export", "purpose": "write", "mode": "write" },
+        { "tool": "ticket_export", "purpose": "write", "mode": "write", "media": "download" },
         { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
       ],
       "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "direct-write" }
@@ -72,7 +112,7 @@
       "route": "export",
       "request": "按刚才计划导出这些工单",
       "calls": [
-        { "tool": "ticket_export", "purpose": "write", "mode": "write", "selection": "prior-plan" },
+        { "tool": "ticket_export", "purpose": "write", "mode": "write", "media": "download", "selection": "prior-plan" },
         { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
       ],
       "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "planned-write" }

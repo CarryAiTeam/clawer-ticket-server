@@ -25,7 +25,7 @@
       "allowedProjects": ["REPLACE_WITH_APPROVED_PROJECT_UUID"],
       "secretRef": "ONES_READ_TOKEN",
       "authentication": { "headerName": "Authorization", "scheme": "Bearer" },
-      "requestBudget": { "maxConcurrent": 1, "maxRequestsPerMinute": 20 },
+      "requestBudget": { "maxConcurrent": 3, "maxRequestsPerMinute": 20 },
       "inlineMaxChars": 12000,
       "classificationRules": [
         {
@@ -45,7 +45,7 @@
       "teamId": "REPLACE_WITH_APPROVED_TEAM_ID",
       "allowedHosts": ["tickets.example.com"],
       "allowedProjects": ["REPLACE_WITH_APPROVED_PROJECT_UUID"],
-      "requestBudget": { "maxConcurrent": 1, "maxRequestsPerMinute": 20 },
+      "requestBudget": { "maxConcurrent": 3, "maxRequestsPerMinute": 20 },
       "inlineMaxChars": 12000,
       "classificationRules": [
         {

@@ -7,6 +7,8 @@ export interface TicketProfile {
   connector: string;
   allowedProjects: string[];
   inlineMaxChars: number;
+  /** 已验证的 provider 请求并发上限；应用层导出 worker 不得超过它。 */
+  maxConcurrent: number;
 }
 
 export interface TicketProfileResolver {
@@ -72,6 +74,8 @@ export interface BrowserSessionStatus {
     authorized: boolean;
     diagnostics: string[];
   };
+  /** 本次调用是否实际新建了浏览器会话，而非复用已存在的显式会话。 */
+  created: boolean;
 }
 
 /** 可选的受监督能力；刻意与工单读取能力分离。 */

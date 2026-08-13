@@ -7,7 +7,7 @@ export class StaticTicketProfileResolver implements TicketProfileResolver {
 
   /** 建立不可重复的受控 profile 索引，供应用层按名称解析。 */
   constructor(profiles: TicketProfile[]) {
-    this.profiles = new Map(profiles.map((profile) => [profile.name, Object.freeze({ ...profile, allowedProjects: [...profile.allowedProjects] })]));
+    this.profiles = new Map(profiles.map((profile) => [profile.name, Object.freeze({ ...profile, maxConcurrent: profile.maxConcurrent ?? 1, allowedProjects: [...profile.allowedProjects] })]));
     if (this.profiles.size !== profiles.length) throw new TicketError("CONFIG_INVALID", "Ticket profile names must be unique");
   }
 

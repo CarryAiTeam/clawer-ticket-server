@@ -6,6 +6,7 @@ import { ConnectionStatus, TicketMediaDownload, TicketMediaDownloadOptions, Tick
 import { SecretProvider, EnvSecretProvider } from "../../infrastructure/security/env-secret-provider.js";
 import { normalizeOnesTicket } from "./ones-ticket-mapper.js";
 import { OnesRawTicketData } from "./ones-contracts.js";
+import { AsyncSemaphore } from "../../infrastructure/async-semaphore.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -177,7 +178,7 @@ async function readAttachmentBytes(response: Response, maxBytes?: number): Promi
 
 export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
   readonly providerId = "ones";
-  private readonly requestStates = new Map<string, { times: number[]; tail: Promise<void> }>();
+  private readonly requestStates = new Map<string, { times: number[]; semaphore: AsyncSemaphore }>();
 
   /** 创建 ONES provider，并注入可替换的密钥和 HTTP 实现。 */
   constructor(
@@ -413,17 +414,14 @@ export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
     return this.secrets.resolve(profile.secretRef!);
   }
 
-  /** 每个 profile 拥有独立串行请求队列，互不消耗 ONES 请求预算。 */
+  /** 每个 profile 拥有独立的有界请求队列，互不消耗 ONES 请求预算。 */
   protected async withRequestSlot<T>(profile: OnesProfile, operation: () => Promise<T>): Promise<T> {
     const state = this.requestState(profile);
-    let release: (() => void) | undefined;
-    const previous = state.tail;
-    state.tail = new Promise<void>((resolve) => { release = resolve; });
-    await previous;
+    const release = await state.semaphore.acquire();
     try {
       return await operation();
     } finally {
-      release?.();
+      release();
     }
   }
 
@@ -454,7 +452,7 @@ export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
     const key = `${profile.source}:${profile.baseUrl}:${profile.teamId}`;
     let state = this.requestStates.get(key);
     if (!state) {
-      state = { times: [], tail: Promise.resolve() };
+      state = { times: [], semaphore: new AsyncSemaphore(profile.requestBudget.maxConcurrent) };
       this.requestStates.set(key, state);
     }
     return state;

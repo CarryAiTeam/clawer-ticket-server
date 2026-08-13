@@ -33,12 +33,12 @@ const provider: TicketProvider = {
     if (query.page.after) {
       assert.equal(query.page.after, "provider-after-1", "the application must unwrap the provider cursor only after validating its public token");
       return {
-        items: [{ id: "task-search-2", key: "T-2", title: "Second result", status: { category: "in_progress" }, projectId: "project-test" }],
+        items: [{ id: "task-search-2", key: "T-2", title: "Second result", status: { name: "进行中", category: "in_progress" }, projectId: "project-test" }],
         page: { returned: 1, totalCount: 2, hasNextPage: false },
       };
     }
     return {
-      items: [{ id: "task-search-1", key: "T-1", title: "First result", status: { category: "to_do" }, projectId: "project-test" }],
+    items: [{ id: "task-search-1", key: "T-1", title: "First result", status: { name: "新建", category: "to_do" }, projectId: "project-test" }],
       page: { returned: 1, totalCount: 2, hasNextPage: true, endCursor: "provider-after-1" },
     };
   },
@@ -46,7 +46,7 @@ const provider: TicketProvider = {
 };
 const browserSessions: BrowserSessionProvider = {
   async openBrowserSession() {
-    return { url: "https://tenant.example.test", message: "connected", authentication: { mode: "manual", authorized: true, diagnostics: [] } };
+    return { url: "https://tenant.example.test", message: "connected", authentication: { mode: "manual", authorized: true, diagnostics: [] }, created: false };
   },
   async closeBrowserSession() {},
 };
@@ -84,10 +84,12 @@ try {
   );
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
   assert.match(byName.get("ticket_search")?.description ?? "", /Read-only list search/);
-  assert.match(byName.get("ticket_search")?.description ?? "", /获取 ONES/);
+  assert.doesNotMatch(byName.get("ticket_search")?.description ?? "", /generic 获取/);
+  assert.match(byName.get("ticket_search")?.description ?? "", /For 获取 ONES 工单, use ticket_export/);
   assert.match(byName.get("ticket_get")?.description ?? "", /never writes local files/);
   assert.match(byName.get("ticket_export")?.description ?? "", /Local export/);
   assert.match(byName.get("ticket_export")?.description ?? "", /Defaults to mode=write/);
+  assert.match(byName.get("ticket_export")?.description ?? "", /获取、下载到本地、导出或保存到本地/);
   for (const [name, args] of [
     ["ticket_connection_status", { profile: "test" }],
     ["ticket_get", { profile: "test", ticket: { id: "task-test" } }],
@@ -189,6 +191,19 @@ try {
   });
   assert.equal(directQueryExport.isError, undefined, "a query export without mode or selection must write the current query selection directly");
   assert.equal(committedExportCount, commitsBeforeDirectQueryExport + 2, "a direct query export must write every current result");
+  const commitsBeforeNamedStatusExport = committedExportCount;
+  const namedStatusExport = await client.callTool({ name: "ticket_export", arguments: { profile: "test", query: { scope: "self", state: "open", statuses: ["新建"] } } });
+  assert.equal(namedStatusExport.isError, undefined, "query export must accept exact ONES display status names");
+  const namedStatusResult = responseJson(namedStatusExport).export as { selectedCount: number; completedCount: number };
+  assert.equal(namedStatusResult.selectedCount, 1, "a named status export must select only matching summaries");
+  assert.equal(namedStatusResult.completedCount, 1, "a named status export must write only matching complete bundles");
+  assert.equal(committedExportCount, commitsBeforeNamedStatusExport + 1, "a named status export must remain a single complete query export");
+  const namedStatusPlan = await client.callTool({ name: "ticket_export", arguments: { profile: "test", query: { scope: "self", state: "open", statuses: ["新建"] }, mode: "plan", media: "metadata" } });
+  assert.equal(namedStatusPlan.isError, undefined, "a named status query export must support preview");
+  const namedStatusPlanResult = responseJson(namedStatusPlan).export as { selection: { expectedCount: number; fingerprint: string } };
+  const changedNamedStatusSelection = await client.callTool({ name: "ticket_export", arguments: { profile: "test", query: { scope: "self", state: "open", statuses: ["进行中"] }, mode: "write", media: "metadata", selection: namedStatusPlanResult.selection } });
+  assert.equal(changedNamedStatusSelection.isError, true, "a plan selection must not be reusable with a different named status");
+  assert.match(responseText(changedNamedStatusSelection), /SELECTION_CHANGED/);
   const changedSelection = await client.callTool({
     name: "ticket_export",
     arguments: { profile: "test", query: { scope: "self", state: "active" }, mode: "write", media: "metadata", selection: { expectedCount: 2, fingerprint: "0".repeat(64) } },

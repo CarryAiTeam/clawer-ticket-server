@@ -6,7 +6,7 @@
 
 - 只注册六个规范工具；
 - 用单一 `ticket_search` 表达我的待办、我的活跃工单与受控自定义查询；
-- 不保留 `ticket_my_open_tasks`、`ticket_export_my_open_tasks`、`includeDetails`、树形索引或 `statuses`；
+- 不保留 `ticket_my_open_tasks`、`ticket_export_my_open_tasks`、`includeDetails` 或树形索引；当前 `ticket_export.query.statuses` 可按 ONES 返回的展示状态名筛选完整查询导出，但不恢复旧专用工具或扩展 `ticket_search`；
 - 查询导出通过 `ticket_export({ query, mode })` 的 plan/write selection 协议完成。
 
 如需新增能力，请更新当前 V1 需求和真实证据，不要恢复本历史草案中的旧接口。

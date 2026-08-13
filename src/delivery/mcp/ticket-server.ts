@@ -33,6 +33,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
   const searchScopeSchema = z.enum(["self", "project"]).describe("Ticket ownership scope. Defaults to self; use project only when the user explicitly requests all people or the whole project.");
   const searchStateSchema = z.enum(["open", "active", "done", "all"]).describe("Ticket status scope. Defaults to open; all includes completed tickets.");
   const searchQuerySchema = z.object({ scope: searchScopeSchema.optional(), state: searchStateSchema.optional(), where: searchWhereSchema.optional() }).strict();
+  const ticketExportQuerySchema = searchQuerySchema.extend({ statuses: z.array(z.string().min(1).max(128)).min(1).max(20).optional().describe("Exact ONES display status names to include during query export, for example [\"新建\"]") }).strict();
   const invalidSearchInput = Symbol("invalid-ticket-search-input");
   const invalidTicketExportInput = Symbol("invalid-ticket-export-input");
   const ticketSearchInputSchema = z.object({
@@ -102,18 +103,19 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_search",
     {
       title: "Search ticket work items",
-      description: "Read-only list search. Use for 查看、查阅、查询、列出 or generic 获取 ONES 工单; it returns flat summaries only and never downloads details or writes local files. Defaults are scope=self and state=open; use state=all for the current user's complete history, and scope=project only for an explicit all-people or whole-project request. Supports only a one-level AND of title contains, issue-type IDs, and status categories. Results are fixed to createTime descending and nextCursor is an opaque server-issued token.",
+      description: "Read-only list search. Use only for 查看、查阅、查询 or 列出 ONES 工单; it returns flat summaries only and never downloads details or writes local files. For 获取 ONES 工单, use ticket_export to write the complete local bundle with media. Defaults are scope=self and state=open; use state=all for the current user's complete history, and scope=project only for an explicit all-people or whole-project request. Supports only a one-level AND of title contains, issue-type IDs, and status categories. Results are fixed to createTime descending and nextCursor is an opaque server-issued token.",
       inputSchema: ticketSearchInputSchema,
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     /** 只将业务输入交给应用层；不向 MCP 暴露 ONES variables 或原始 continuation cursor。 */
-    async (input) => {
+    async (input, extra) => {
       try {
         if ((input as unknown) === invalidSearchInput) {
           throw new TicketError("QUERY_INVALID", "ticket_search input does not match the V1 query schema");
         }
         const { profile, scope, state, where, page } = input;
-        return textResult({ ok: true, ...(await (await getApplication()).searchTickets({ profile, scope, state, where, page })) });
+        const app = await getApplication();
+        return textResult({ ok: true, ...(await app.withBrowserAuthRecovery(profile, () => app.searchTickets({ profile, scope, state, where, page }), extra.signal)) });
       } catch (error) {
         return errorResult(error);
       }
@@ -124,7 +126,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
   const ticketExportInputSchema = z.object({
     profile: profileSchema,
     ticket: ticketSchema.optional(),
-    query: searchQuerySchema.optional(),
+    query: ticketExportQuerySchema.optional(),
     selection: z.object({ expectedCount: z.number().int().min(0), fingerprint: z.string().regex(/^[a-f0-9]{64}$/i) }).strict().optional(),
     mode: z.enum(["plan", "write"]).default("write").describe("write commits a local bundle immediately; use plan only when the caller explicitly requests a preview"),
     media: z.enum(["metadata", "download"]).default("download").describe("download includes attachment-backed images and binaries during write; metadata writes no binary media"),
@@ -133,14 +135,15 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_get",
     {
       title: "Get a ticket work item",
-      description: "Reads one work item for 查看详情、查阅详情 or 获取某工单详情. Returns bounded details, comments and attachment metadata only; it never writes local files or downloads binary media. Use ticket_search for generic 查看/查阅列表 and ticket_export for 下载到本地/导出/保存到本地.",
+      description: "Reads one work item for 查看详情 or 查阅详情. Returns bounded details, comments and attachment metadata only; it never writes local files or downloads binary media. Use ticket_search for generic 查看/查阅列表 and ticket_export for 获取、下载到本地、导出或保存到本地.",
       inputSchema: { profile: profileSchema, ticket: ticketSchema },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     /** 处理单张工单详情读取请求，并投影为有界内联结果。 */
-    async ({ profile, ticket }) => {
+    async ({ profile, ticket }, extra) => {
       try {
-        return textResult({ ok: true, ticket: await (await getApplication()).getTicketInline(profile, ticket) });
+        const app = await getApplication();
+        return textResult({ ok: true, ticket: await app.withBrowserAuthRecovery(profile, () => app.getTicketInline(profile, ticket), extra.signal) });
       } catch (error) {
         return errorResult(error);
       }
@@ -151,12 +154,12 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_export",
     {
       title: "Export a ticket work item",
-      description: "Local export for 下载到本地、导出、保存到本地 or 获取到本地. It fetches complete normalized details including comments and attachment-backed images. Defaults to mode=write for a direct local export; use mode=plan only when the caller explicitly requests a preview. Query writes with a selection returned by a prior plan validate that frozen selection; direct query writes export the current matching selection in one call. Item/media budgets are enforced and results include completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
+      description: "Local export for 获取、下载到本地、导出或保存到本地. It fetches complete normalized details including comments and attachment-backed images. Query.statuses accepts exact ONES display status names such as 新建; query writes export the complete matching selection in one call. Defaults to mode=write with media=download for a direct local export; use mode=plan only when the caller explicitly requests a preview. Query writes with a selection returned by a prior plan validate that frozen selection. Item/media budgets are enforced and results include completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
       inputSchema: ticketExportInputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     /** 处理单张工单或冻结查询选择的导出计划/写入请求。 */
-    async (input) => {
+    async (input, extra) => {
       try {
         if ((input as unknown) === invalidTicketExportInput) {
           throw new TicketError("QUERY_INVALID", "ticket_export input does not match the V1 export schema");
@@ -164,8 +167,8 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
         const { profile, ticket, query, selection, mode, media } = input;
         const app = await getApplication();
         if (ticket && query) throw new TicketError("QUERY_INVALID", "ticket_export accepts either ticket or query, not both");
-        if (ticket) return textResult({ ok: true, export: await app.exportTicket(profile, ticket, mode, media) });
-        if (query) return textResult({ ok: true, export: await app.exportTicketSearch(profile, query, mode, media, selection) });
+        if (ticket) return textResult({ ok: true, export: await app.withBrowserAuthRecovery(profile, () => app.exportTicket(profile, ticket, mode, media), extra.signal) });
+        if (query) return textResult({ ok: true, export: await app.withBrowserAuthRecovery(profile, () => app.exportTicketSearch(profile, query, mode, media, selection, extra.signal), extra.signal) });
         throw new TicketError("QUERY_INVALID", "ticket_export requires ticket or query");
       } catch (error) {
         return errorResult(error);

@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   TicketFilter,
+  TicketExportSearchInput,
   TicketSearchInput,
   TicketSearchQuery,
   TicketSearchSelection,
@@ -24,6 +25,10 @@ export interface NormalizedTicketSearchInput {
   profile?: string;
   cursor?: string;
   query: TicketSearchQuery;
+}
+
+export interface NormalizedTicketExportSearchInput extends NormalizedTicketSearchInput {
+  statuses: string[];
 }
 
 export interface TicketSearchCursorBinding {
@@ -227,10 +232,29 @@ export function normalizeTicketSearchInput(value: TicketSearchInput | unknown): 
   };
 }
 
+/**
+ * 查询型导出可在受控基础查询上按 ONES 返回的展示状态名进一步筛选。
+ * 该条件刻意不进入列表搜索，避免破坏其 provider 分页与计数契约。
+ */
+export function normalizeTicketExportSearchInput(value: TicketExportSearchInput | unknown): NormalizedTicketExportSearchInput {
+  const input = record(value, "ticket_export query");
+  onlyKeys(input, ["profile", "scope", "state", "where", "page", "statuses"], "ticket_export query");
+  const statuses = input.statuses === undefined ? [] : stringArray(input.statuses, "statuses", 20, 128);
+  const { statuses: _statuses, ...searchInput } = input;
+  return { ...normalizeTicketSearchInput(searchInput), statuses };
+}
+
 /** 同一 profile、范围、状态、条件和固定排序始终产生同一 fingerprint。 */
 export function ticketSearchFingerprint(profile: string, query: Pick<TicketSearchQuery, "scope" | "state" | "filter" | "sort">): string {
   return createHash("sha256")
     .update(JSON.stringify({ version: 1, profile, scope: query.scope, state: query.state, filter: query.filter, sort: query.sort }))
+    .digest("hex");
+}
+
+/** 导出选择还绑定展示状态名，避免 plan 被另一状态条件的 write 复用。 */
+export function ticketExportSearchFingerprint(profile: string, query: Pick<TicketSearchQuery, "scope" | "state" | "filter" | "sort">, statuses: readonly string[]): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ version: 1, queryFingerprint: ticketSearchFingerprint(profile, query), statuses }))
     .digest("hex");
 }
 

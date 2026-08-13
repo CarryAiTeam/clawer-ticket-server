@@ -16,7 +16,8 @@ export type TicketErrorCode =
   | "SELECTION_CHANGED"
   | "EXPORT_LIMIT_EXCEEDED"
   | "EXPORT_ROOT_DENIED"
-  | "PROVIDER_NOT_AVAILABLE";
+  | "PROVIDER_NOT_AVAILABLE"
+  | "REQUEST_CANCELLED";
 
 /** 工单用例与 MCP 结果映射对外暴露的 provider 无关错误。 */
 export class TicketError extends Error {

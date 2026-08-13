@@ -1,11 +1,11 @@
 ---
 name: ones-ticket-mcp
-description: 当用户查询、查看列表、读取详情、分页、检查授权、连接或关闭 ONES 浏览器、导出 ONES 工单时使用；支持中文意图归一化、纯数字工单号自动解析、browser.autoLogin 自动授权和完成后自动清理临时页面。
+description: 当用户获取、查询、查看列表、读取详情、分页、检查授权、连接或关闭 ONES 浏览器、导出 ONES 工单时使用；支持自动授权、自动清理和三工位补位下载。
 ---
 
-# ONES 工单自动化流水线
+# ONES 工单自动化
 
-将用户的一次请求完成为“连接/授权 → 读取 → 返回 → 关闭临时 ONES 页面”的完整流水线。以 MCP 实际 schema 和返回值为准，不向用户暴露 token、Cookie、原始 GraphQL 或临时 URL。
+以 MCP 实际 schema 与返回值为准；不暴露 token、Cookie、原始 GraphQL 或临时 URL。
 
 ## 工具与路由
 
@@ -13,33 +13,33 @@ description: 当用户查询、查看列表、读取详情、分页、检查授�
 
 | 请求意图 | 首选调用 | 关键规则 |
 | --- | --- | --- |
-| 查看、查阅、查询、列出、获取工单 | `ticket_search` | 只读列表；默认 `scope: "self"`、`state: "open"` |
-| 查看/获取某工单详情 | `ticket_get` | 详情、评论流和附件元数据；纯数字工单号先精确搜索 `number` 再用内部 `id` |
-| 下载到本地、导出、保存、获取到本地 | `ticket_export` | 明确下载即 `mode: "write"`；仅明确提出计划、预览或先看看导出范围时用 `mode: "plan"` |
+| 查看、查阅、查询、列出工单 | `ticket_search` | 只读列表；默认 `scope: "self"`、`state: "open"` |
+| 查看/读取某工单详情 | `ticket_get` | 只读详情、评论与附件元数据，不落盘 |
+| 获取、下载到本地、导出、保存 | `ticket_export` | 查询导出在一次调用中完整下载详情、图片和附件：`mode: "write", media: "download"`；用户说的展示状态（如“新建”）写入 `query.statuses`；仅明确预览才用 `mode: "plan"`，仅明确不要媒体才用 `media: "metadata"` |
 
 ## 固定执行顺序
 
-对每次请求遵循：
+`normalize profile/ref → execute intended call → service auth recovery once when needed → render result`
 
-`normalize profile/ref → execute intended call → auth recovery once → retry once → disconnect in finally → render result`
+Compatibility lifecycle notation: `normalize profile/ref → execute intended call → auth recovery once → retry once → disconnect in finally → render result`. The service now owns the automatic retry and cleanup, so callers must not repeat those tool calls.
 
-1. 规范化 `profile` 和工单引用。用户明确给出 profile 原样传入；只有服务确认恰好一个 profile 时才省略。profile 不明确时请用户选择，不猜测。
-2. 不为普通只读、导出计划或明确本地下载请求预先询问连接授权或调用状态；先执行目标调用。明确“下载到本地、导出、保存到本地、获取到本地”本身也是一次写入授权，不要求回复“连接 ONES”或重复确认下载。
-3. 目标调用返回 `SOURCE_UNAUTHORIZED` 或 `HUMAN_ACTION_REQUIRED` 时，调用 `ticket_connection_status`；connector 为 `browser` 就立即调用 `ticket_browser_connect`。它会按 `browser.autoLogin` 自动登录并探测 `authentication.authorized: true`，无需二次确认。
-4. 自动授权成功后，用完全相同的参数重试原始只读调用一次。仍未授权时，仅在真实出现 MFA、CAPTCHA、SSO 或其他人工挑战时请用户在可见窗口完成；不绕过挑战。
-5. `scope: "project"` 是必要的项目级例外：查询前确认 `allowedProjects` 非空；空白名单按 `SOURCE_NOT_ALLOWED` 停止，不扩大范围。
-6. 在列表、详情、分页、导出 `plan` 或 `write` 到达终态后，在 `finally` 调用 `ticket_browser_disconnect` 清理本次使用的临时 browser session；成功、未找到和普通错误都清理。不要求用户确认关闭。
-7. 若出现 MFA/CAPTCHA/SSO，或用户明确说“保持浏览器打开”，保留可见页面，直到挑战/后续请求完成；这是唯一的页面清理例外。
+1. 先直接调用目标工具；不要为普通读取、导出计划或本地下载预先调用连接或状态检查，也不要求回复“连接 ONES”。
+   明确“获取、下载到本地、导出、保存到本地”本身也是一次写入授权。
+2. browser profile 首次遇到 `SOURCE_UNAUTHORIZED` 或 `HUMAN_ACTION_REQUIRED` 时，服务端会自动打开浏览器、执行已配置的 `browser.autoLogin`，确认 `authentication.authorized: true` 后以原参数重试一次；无需二次确认。
+3. 仅自动新建且已授权的临时会话会在成功、失败或取消时由服务端清理；显式 `ticket_browser_connect` 创建的会话不自动关闭。
+4. 若出现 MFA、CAPTCHA、SSO 或其他人工挑战，服务端保留可见浏览器；请用户完成挑战后重试目标工具。不要重复打开浏览器，也不要自动关闭挑战页。
+5. 用户明确要求连接、保持页面，或需要完成挑战时才调用 `ticket_browser_connect`；这类显式会话由调用方在完成后调用 `ticket_browser_disconnect`，不要求用户确认关闭。
+6. `scope: "project"` 需要非空 `allowedProjects`；空白名单返回 `SOURCE_NOT_ALLOWED`，不得扩大范围。
+7. 查询型 `write` 最多使用 3 个工位：每个工位只处理一张，完成详情读取、附件下载与原子落盘后立即领取下一张。不要并发调用多个 `ticket_export`。
+8. 30 秒只是“仍在处理”的观察阈值，不是强制终止时间。取消时不领取下一张，已在处理的工单收尾后返回。
 
 ## 按需读取的参考契约
 
-仅在对应分支需要时读取，避免把低频细节注入每次查询：
-
 | 参考文件 | 读取条件 |
 | --- | --- |
-| [intent-mapping.md](references/intent-mapping.md) | 中文范围/状态、列表与详情边界、`self`/`project` 组合无法直接判断时 |
-| [query-contract.md](references/query-contract.md) | 构造 `where`、分页 cursor、纯数字工单号查找或项目白名单参数时 |
-| [export-safety.md](references/export-safety.md) | 用户提出下载/导出/保存，或需要执行 `plan → write` 时 |
-| [errors.md](references/errors.md) | MCP 返回稳定错误码、恢复或向用户说明异常时 |
+| [intent-mapping.md](references/intent-mapping.md) | 中文范围、状态或获取与只读边界无法直接判断时 |
+| [query-contract.md](references/query-contract.md) | 构造 `where`、分页 cursor、数字工单号或项目白名单时 |
+| [export-safety.md](references/export-safety.md) | 用户提出获取/下载/导出/保存，或需要执行 `plan → write` 时 |
+| [errors.md](references/errors.md) | 需要解释 MCP 稳定错误码或恢复步骤时 |
 
-返回时说明实际 profile、scope/state、筛选、数量和是否还有下一页；导出要明确是预览计划还是已写入。
+返回时说明实际 profile、scope/state、选择数量、完成数量、失败项与 `completedTickets` 的完成顺序；导出还要明确是预览还是已写入。
