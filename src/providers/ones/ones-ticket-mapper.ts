@@ -8,6 +8,33 @@ const asRecord = (value: unknown): UnknownRecord => (value !== null && typeof va
 const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 const text = (value: unknown): string | undefined => (typeof value === "string" && value.trim() ? value.trim() : undefined);
 
+/** 将 ONES 的秒级或毫秒级时间戳转换为页面一致的中国标准时间。 */
+function timeText(value: unknown): string | undefined {
+  const raw = text(value);
+  if (raw && !/^\d{10}(?:\d{3})?$/.test(raw)) return raw;
+  const numeric = typeof value === "number" ? value : raw ? Number(raw) : NaN;
+  if (!Number.isFinite(numeric)) return undefined;
+  const milliseconds = Math.abs(numeric) < 100_000_000_000 ? numeric * 1_000 : numeric;
+  const date = new Date(milliseconds);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const values = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date).reduce<Record<string, string>>((result, part) => {
+    if (part.type !== "literal") result[part.type] = part.value;
+    return result;
+  }, {});
+  return values.year && values.month && values.day && values.hour && values.minute && values.second
+    ? `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`
+    : undefined;
+}
+
 /** 将 ONES 人员对象映射为领域层的最小人员信息。 */
 function toPerson(value: unknown): Person | undefined {
   if (typeof value === "string" && value.trim()) return { id: value.trim() };
@@ -233,6 +260,7 @@ export function normalizeOnesTicket(profile: OnesProfile, raw: OnesRawTicketData
   const number = explicitId ?? text(detail.number) ?? (typeof detail.number === "number" ? String(detail.number) : undefined);
   const severity = importantFields.find((field) => field.name === "严重程度")?.value;
   const iteration = normalizeIteration(detail);
+  const createdAt = timeText(detail.createTime) ?? timeText(detail.createdAt) ?? timeText(detail.create_time);
   return {
     schemaVersion: "1.0",
     source: {
@@ -258,7 +286,7 @@ export function normalizeOnesTicket(profile: OnesProfile, raw: OnesRawTicketData
     ...(iteration ? { iteration } : {}),
     ...(toPerson(detail.assign) ? { assignee: toPerson(detail.assign) } : {}),
     ...(toPerson(detail.owner) ? { reporter: toPerson(detail.owner) } : {}),
-    ...(text(detail.createTime) ? { createdAt: text(detail.createTime) } : {}),
+    ...(createdAt ? { createdAt } : {}),
     ...(text(detail.serverUpdateStamp) ? { updatedAt: text(detail.serverUpdateStamp) } : {}),
     comments: normalizeMessages(raw.messages),
     attachments: normalizeAttachments(detail, raw.attachments),

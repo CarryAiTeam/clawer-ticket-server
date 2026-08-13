@@ -203,6 +203,7 @@ function markdown(ticket: CanonicalTicket, media: TicketMediaPlan[] = []): strin
     `- 严重程度：${markdownPlain(ticket.severity ?? "未设置")}`,
     `- 所属迭代：${markdownPlain(ticket.iteration?.name ?? "未设置")}`,
     `- 负责人：${markdownPlain(ticket.assignee?.displayName ?? "未设置")}`,
+    `- 创建时间：${markdownPlain(ticket.createdAt ?? "未设置")}`,
     "",
     "## 描述",
     "",

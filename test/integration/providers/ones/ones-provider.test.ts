@@ -43,6 +43,7 @@ const rawTicket: OnesRawTicketData = {
   detail: {
     uuid: "task-1",
     key: "P-1",
+    createTime: 1786439549,
     name: "示例技术改造",
     description: "<p>安全描述<a href=\"https://tenant.example.test/api/project/file/attachment/abc?token=temporary\">a.png</a><img alt=\"描述图\" data-uuid=\"attachment-1\" data-mime=\"image/png\" src=\"https://tenant.example.test/api/project/file/attachment/abc?token=temporary\"><br><img alt=\"重复描述图\" data-uuid=\"attachment-1\" data-mime=\"image/png\" src=\"https://tenant.example.test/api/project/file/attachment/abc?token=temporary\"></p>",
     descriptionText: "安全描述",
@@ -353,6 +354,7 @@ try {
   const ticket = await application.getTicket("demo", { id: "task-1" });
   assert.equal(ticket.classification.value, "technical-change");
   assert.equal(ticket.source.ticketNumber, "#209161");
+  assert.equal(ticket.createdAt, "2026-08-11 17:12:29");
   assert.equal(ticket.severity, "提示");
   assert.equal(ticket.descriptionMarkdown, "安全描述a.png (https://tenant.example.test/api/project/file/attachment/abc)[image: 描述图]\n[image: 重复描述图]");
   assert.equal(ticket.descriptionImages?.[0]?.attachmentId, "attachment-1");
@@ -368,6 +370,10 @@ try {
   assert.equal(ticket.comments[2]?.bodyMarkdown, "[image: 评论上传.png]");
   assert.equal(ticket.comments[2]?.images?.[0]?.attachmentId, "attachment-1");
   assert.equal(ticket.comments.length, 3);
+  assert.equal(normalizeOnesTicket(config.profiles.demo!, {
+    ...rawTicket,
+    detail: { ...(rawTicket.detail as Record<string, unknown>), createTime: 1786439549000 },
+  }).createdAt, "2026-08-11 17:12:29");
   assert.equal(ticket.attachments.length, 1);
   assert.equal(ticket.source.ticketKey, "P-1");
   assert.equal(ticket.iteration?.name, "迭代 A");
@@ -503,6 +509,7 @@ try {
   assert.match(ticketMarkdown, /\[进度图\]\(assets\/comments\/README\.md#comment-image-1-1\)/);
   assert.match(ticketMarkdown, /## 评论/);
   assert.match(ticketMarkdown, /严重程度：提示/);
+  assert.match(ticketMarkdown, /创建时间：2026-08-11 17:12:29/);
   assert.doesNotMatch(ticketMarkdown, /## 动态/);
   assert.doesNotMatch(ticketMarkdown, /update: 状态/);
   assert.doesNotMatch(ticketMarkdown, /### 内联图片/);
