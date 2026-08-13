@@ -84,10 +84,12 @@ try {
   );
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
   assert.match(byName.get("ticket_search")?.description ?? "", /Read-only list search/);
-  assert.match(byName.get("ticket_search")?.description ?? "", /获取 ONES/);
+  assert.doesNotMatch(byName.get("ticket_search")?.description ?? "", /generic 获取/);
+  assert.match(byName.get("ticket_search")?.description ?? "", /For 获取 ONES 工单, use ticket_export/);
   assert.match(byName.get("ticket_get")?.description ?? "", /never writes local files/);
   assert.match(byName.get("ticket_export")?.description ?? "", /Local export/);
   assert.match(byName.get("ticket_export")?.description ?? "", /Defaults to mode=write/);
+  assert.match(byName.get("ticket_export")?.description ?? "", /获取、下载到本地、导出或保存到本地/);
   for (const [name, args] of [
     ["ticket_connection_status", { profile: "test" }],
     ["ticket_get", { profile: "test", ticket: { id: "task-test" } }],

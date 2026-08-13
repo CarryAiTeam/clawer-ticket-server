@@ -102,7 +102,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_search",
     {
       title: "Search ticket work items",
-      description: "Read-only list search. Use for 查看、查阅、查询、列出 or generic 获取 ONES 工单; it returns flat summaries only and never downloads details or writes local files. Defaults are scope=self and state=open; use state=all for the current user's complete history, and scope=project only for an explicit all-people or whole-project request. Supports only a one-level AND of title contains, issue-type IDs, and status categories. Results are fixed to createTime descending and nextCursor is an opaque server-issued token.",
+      description: "Read-only list search. Use only for 查看、查阅、查询 or 列出 ONES 工单; it returns flat summaries only and never downloads details or writes local files. For 获取 ONES 工单, use ticket_export to write the complete local bundle with media. Defaults are scope=self and state=open; use state=all for the current user's complete history, and scope=project only for an explicit all-people or whole-project request. Supports only a one-level AND of title contains, issue-type IDs, and status categories. Results are fixed to createTime descending and nextCursor is an opaque server-issued token.",
       inputSchema: ticketSearchInputSchema,
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -133,7 +133,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_get",
     {
       title: "Get a ticket work item",
-      description: "Reads one work item for 查看详情、查阅详情 or 获取某工单详情. Returns bounded details, comments and attachment metadata only; it never writes local files or downloads binary media. Use ticket_search for generic 查看/查阅列表 and ticket_export for 下载到本地/导出/保存到本地.",
+      description: "Reads one work item for 查看详情 or 查阅详情. Returns bounded details, comments and attachment metadata only; it never writes local files or downloads binary media. Use ticket_search for generic 查看/查阅列表 and ticket_export for 获取、下载到本地、导出或保存到本地.",
       inputSchema: { profile: profileSchema, ticket: ticketSchema },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -151,7 +151,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_export",
     {
       title: "Export a ticket work item",
-      description: "Local export for 下载到本地、导出、保存到本地 or 获取到本地. It fetches complete normalized details including comments and attachment-backed images. Defaults to mode=write for a direct local export; use mode=plan only when the caller explicitly requests a preview. Query writes with a selection returned by a prior plan validate that frozen selection; direct query writes export the current matching selection in one call. Item/media budgets are enforced and results include completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
+      description: "Local export for 获取、下载到本地、导出或保存到本地. It fetches complete normalized details including comments and attachment-backed images. Defaults to mode=write with media=download for a direct local export; use mode=plan only when the caller explicitly requests a preview. Query writes with a selection returned by a prior plan validate that frozen selection; direct query writes export the current matching selection in one call. Item/media budgets are enforced and results include completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
       inputSchema: ticketExportInputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },

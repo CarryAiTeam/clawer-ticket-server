@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-type Call = { tool: string; purpose?: string; outcome?: string; retryOf?: number; autoLogin?: boolean; mode?: "plan" | "write"; selection?: "prior-plan"; match?: { field: string; value: string; mode: string } };
+type Call = { tool: string; purpose?: string; outcome?: string; retryOf?: number; autoLogin?: boolean; mode?: "plan" | "write"; media?: "metadata" | "download"; selection?: "prior-plan"; match?: { field: string; value: string; mode: string } };
 type Scenario = {
   id: string;
   route: "list" | "detail" | "export" | "blocked";
   calls: Call[];
-  policy: { auth: "ready" | "automatic" | "challenge" | "not-needed"; retryOnce?: boolean; cleanup: "disconnect" | "leave-open" | "if-session"; exportFlow?: "plan-only" | "direct-write" | "planned-write"; queryBlocked?: boolean; exactMatch?: boolean };
+  policy: { auth: "ready" | "automatic" | "challenge" | "not-needed"; retryOnce?: boolean; cleanup: "disconnect" | "leave-open" | "if-session"; exportFlow?: "plan-only" | "direct-write" | "planned-write"; media?: "metadata" | "download"; requiresCompleteMedia?: boolean; queryBlocked?: boolean; exactMatch?: boolean };
 };
 
 const skillRoot = new URL("../../skills/ones-ticket-mcp/", import.meta.url);
@@ -35,16 +35,16 @@ assert.ok(skill.length <= 8_000, "low-frequency contracts belong in references")
 for (const heading of ["## 工具与路由", "## 固定执行顺序", "## 按需读取的参考契约"]) assert.ok(skill.includes(heading));
 for (const tool of tools) assert.ok(skill.includes(`mcp__clawer_ticket__${tool}`), `main Skill must name ${tool}`);
 for (const [request, tool] of [
-  ["查看、查阅、查询、列出、获取工单", "ticket_search"],
-  ["查看/获取某工单详情", "ticket_get"],
-  ["下载到本地、导出、保存、获取到本地", "ticket_export"],
+  ["查看、查阅、查询、列出工单", "ticket_search"],
+  ["查看/读取某工单详情", "ticket_get"],
+  ["获取、下载到本地、导出、保存", "ticket_export"],
 ] as const) assert.match(skill, new RegExp("\\\\| " + request + " \\\\| `" + tool + "`"), `route table must map ${request}`);
 for (const rule of [
   "normalize profile/ref → execute intended call → auth recovery once → retry once → disconnect in finally → render result",
   "不要求回复“连接 ONES”",
   "authentication.authorized: true",
   "无需二次确认",
-  "明确“下载到本地、导出、保存到本地、获取到本地”本身也是一次写入授权",
+  "明确“获取、下载到本地、导出、保存到本地”本身也是一次写入授权",
   "不要求用户确认关闭",
   "MFA",
   "CAPTCHA",
@@ -65,14 +65,20 @@ const exportSafety = await readFile(new URL("references/export-safety.md", skill
 for (const rule of ["计划、预览、先看看", "不要先展示计划再要求“确认下载”", "mode: \"write\""]) {
   assert.ok(exportSafety.includes(rule), `export safety must retain ${rule}`);
 }
+for (const rule of ["“获取”默认表示本地写入", "mode: \"write\", media: \"download\"", "只有明确要求“仅文本”“不要下载图片/附件/媒体”"]) {
+  assert.ok(exportSafety.includes(rule) || (await readFile(new URL("references/intent-mapping.md", skillRoot), "utf8")).includes(rule), `retrieval media rule must retain ${rule}`);
+}
+for (const rule of ["同步到本地", "同步更新本地", "mode: \"write\", media: \"download\"", "不得为了缩小输出或提高速度传 `media: \"metadata\"`", "同步完成条件", "downloadedMediaCount", "不得称“同步成功”"]) {
+  assert.ok(exportSafety.includes(rule) || skill.includes(rule) || (await readFile(new URL("references/intent-mapping.md", skillRoot), "utf8")).includes(rule), `synchronization safety must retain ${rule}`);
+}
 assert.match(metadata, /^interface:\r?\n/m);
 assert.match(metadata, /display_name:\s*"[^"]+"/);
 assert.match(metadata, /short_description:\s*"[^"]{25,64}"/);
 assert.match(metadata, /default_prompt:\s*"[^"]*\$ones-ticket-mcp[^"]*"/);
 
 // P1: machine-readable scenarios prove ordering and the necessary exceptions.
-assert.equal(fixture.version, 2);
-assert.equal(fixture.scenarios.length, 8, "fixture must cover all P0/P1 paths");
+assert.equal(fixture.version, 3);
+assert.equal(fixture.scenarios.length, 12, "fixture must cover all P0/P1 paths");
 assert.equal(new Set(fixture.scenarios.map(({ id }) => id)).size, fixture.scenarios.length, "scenario IDs must be unique");
 for (const current of fixture.scenarios) {
   assert.ok(current.calls.length > 0, `${current.id} must describe calls`);
@@ -82,6 +88,27 @@ for (const current of fixture.scenarios) {
   if (current.policy.exportFlow) assert.equal(current.route, "export", "an export flow must use the export route");
 }
 
+{
+  const current = find("retrieve-query-download-media");
+  const write = indexOf(current.calls, "ticket_export");
+  assert.equal(current.calls[write]!.purpose, "retrieve-query");
+  assert.equal(current.calls[write]!.mode, "write");
+  assert.equal(current.calls[write]!.media, "download");
+  assert.equal(current.policy.requiresCompleteMedia, true);
+}
+{
+  const current = find("retrieve-numeric-ticket-download-media");
+  const resolve = indexOf(current.calls, "ticket_search");
+  const write = indexOf(current.calls, "ticket_export", resolve + 1);
+  assert.deepEqual(current.calls[resolve]!.match, { field: "number", value: "209488", mode: "exact" });
+  assert.equal(current.calls[write]!.media, "download");
+}
+{
+  const current = find("explicit-metadata-export");
+  const write = indexOf(current.calls, "ticket_export");
+  assert.equal(current.calls[write]!.media, "metadata");
+  assert.equal(current.policy.requiresCompleteMedia, undefined);
+}
 {
   const current = find("ready-numeric-detail");
   const search = current.calls.find(({ purpose }) => purpose === "resolve-number");
@@ -116,6 +143,7 @@ for (const current of fixture.scenarios) {
   const current = find("export-plan");
   assert.equal(current.calls[0]!.purpose, "plan");
   assert.equal(current.calls[0]!.mode, "plan");
+  assert.equal(current.calls[0]!.media, "download");
   assert.equal(current.policy.exportFlow, "plan-only");
   assert.ok(!current.calls.some(({ purpose }) => purpose === "write"), "an explicit preview request must not write");
 }
@@ -124,6 +152,7 @@ for (const current of fixture.scenarios) {
   const write = indexOf(current.calls, "ticket_export");
   assert.equal(current.calls[write]!.purpose, "write");
   assert.equal(current.calls[write]!.mode, "write");
+  assert.equal(current.calls[write]!.media, "download");
   assert.equal(current.calls[write]!.selection, undefined);
   assert.equal(current.policy.exportFlow, "direct-write");
   assert.ok(!current.calls.some(({ purpose }) => purpose === "plan"), "a direct export must not wait for a preview or repeated confirmation");
@@ -133,9 +162,19 @@ for (const current of fixture.scenarios) {
   const write = indexOf(current.calls, "ticket_export");
   assert.equal(current.calls[write]!.purpose, "write");
   assert.equal(current.calls[write]!.mode, "write");
+  assert.equal(current.calls[write]!.media, "download");
   assert.equal(current.calls[write]!.selection, "prior-plan");
   assert.equal(current.policy.exportFlow, "planned-write");
   assert.ok(!current.calls.some(({ purpose }) => purpose === "plan"), "writing an already previewed export must reuse rather than repeat its plan");
+}
+{
+  const current = find("sync-local-download-media");
+  const write = indexOf(current.calls, "ticket_export");
+  assert.equal(current.calls[write]!.purpose, "sync-local");
+  assert.equal(current.calls[write]!.mode, "write");
+  assert.equal(current.calls[write]!.media, "download");
+  assert.equal(current.policy.media, "download");
+  assert.equal(current.policy.requiresCompleteMedia, true);
 }
 {
   const current = find("project-without-allowlist");

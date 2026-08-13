@@ -25,12 +25,12 @@ Skill 源文件位于 `skills/ones-ticket-mcp/`。它是随 npm 包发布的版�
 
 ## 三类中文意图
 
-- “查看、查阅、查询、列出、获取 ONES 工单”只调用 `ticket_search`，默认是当前用户负责且未完成的列表。
-- “查看详情、查阅某工单详情、获取某工单详情”调用 `ticket_get`，不落盘、不下载二进制媒体。
-- “下载到本地、导出、保存到本地、获取到本地”调用 `ticket_export` 并直接写入；只有同一请求明确说计划、预览或先看看导出范围时才返回 `plan`。
+- “查看、查阅、查询、列出 ONES 工单”只调用 `ticket_search`，默认是当前用户负责且未完成的列表。
+- “查看详情、查阅某工单详情”调用 `ticket_get`，不落盘、不下载二进制媒体。
+- “获取、下载到本地、导出、保存到本地、获取到本地”调用 `ticket_export` 并直接写入；只有同一请求明确说计划、预览或先看看导出范围时才返回 `plan`。
 - 用户给出 `209488` 这类纯数字工单号时，Skill 会先自动搜索并精确匹配 `number`，再用服务端返回的内部 `id` 读取详情。
 
-“到本地/下载/导出/保存”优先级高于“查看/获取”；裸“获取”不会触发本地写入。
+“获取/到本地/下载/导出/保存”优先级高于“查看”；裸“获取”会触发完整本地写入。
 
 ## 搜索
 
@@ -64,9 +64,9 @@ Skill 源文件位于 `skills/ones-ticket-mcp/`。它是随 npm 包发布的版�
 
 单张导出传 `ticket`；查询导出传与 `ticket_search` 相同的 `query`（query 不含 `page`）。
 
-明确下载时，调用 \`ticket_export({ query, mode: "write" })\`；省略 `mode` 也默认直接写入当前完整选择。服务在同一调用中冻结该选择，并逐张原子写入，不会把全部详情保留在内存中。
+“获取工单”与明确下载时，调用 \`ticket_export({ query, mode: "write", media: "download" })\`，得到包含附件和图片的完整本地副本；省略两个字段时服务端也默认如此。服务在同一调用中冻结该选择，并逐张原子写入，不会把全部详情保留在内存中。只说“查看、查阅、查询、列出”时使用只读工具。
 
-只有用户明确要求预览时，才调用 \`ticket_export({ query, mode: "plan" })\`。计划会返回 \`selection\`，后续“按刚才计划导出”需将完全相同的查询、\`selection\` 与 media 回传给 \`mode: "write"\`；数量或有序 ID 集合变化时返回 \`SELECTION_CHANGED\`，不会静默扩大写入范围。默认 \`media: "download"\`，显式 \`media: "metadata"\` 时不下载二进制附件。
+只有用户明确要求预览时，才调用 \`ticket_export({ query, mode: "plan" })\`。计划会返回 \`selection\`，后续“按刚才计划导出”需将完全相同的查询、\`selection\` 与 media 回传给 \`mode: "write"\`；数量或有序 ID 集合变化时返回 \`SELECTION_CHANGED\`，不会静默扩大写入范围。\`media: "metadata"\` 是用户明确要求“不要附件/图片、仅元数据”时的降级选项，不能用于普通“获取”。
 
 服务端默认限制查询导出最多 50 张工单、500 个媒体文件、单文件 50 MiB、总媒体 512 MiB。可在 `storage.exportLimits` 中调整；超限返回 `EXPORT_LIMIT_EXCEEDED`。查询 write 会逐张处理并返回 `complete`、`completedCount` 和 `failedTickets`，重新 plan 后可利用已有 bundle 的幂等复用继续执行。
 
