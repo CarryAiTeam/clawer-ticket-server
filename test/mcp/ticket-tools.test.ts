@@ -46,7 +46,7 @@ const provider: TicketProvider = {
 };
 const browserSessions: BrowserSessionProvider = {
   async openBrowserSession() {
-    return { url: "https://tenant.example.test", message: "connected", authentication: { mode: "manual", authorized: true, diagnostics: [] } };
+    return { url: "https://tenant.example.test", message: "connected", authentication: { mode: "manual", authorized: true, diagnostics: [] }, created: false };
   },
   async closeBrowserSession() {},
 };

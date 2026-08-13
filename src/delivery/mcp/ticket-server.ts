@@ -107,13 +107,14 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     /** 只将业务输入交给应用层；不向 MCP 暴露 ONES variables 或原始 continuation cursor。 */
-    async (input) => {
+    async (input, extra) => {
       try {
         if ((input as unknown) === invalidSearchInput) {
           throw new TicketError("QUERY_INVALID", "ticket_search input does not match the V1 query schema");
         }
         const { profile, scope, state, where, page } = input;
-        return textResult({ ok: true, ...(await (await getApplication()).searchTickets({ profile, scope, state, where, page })) });
+        const app = await getApplication();
+        return textResult({ ok: true, ...(await app.withBrowserAuthRecovery(profile, () => app.searchTickets({ profile, scope, state, where, page }), extra.signal)) });
       } catch (error) {
         return errorResult(error);
       }
@@ -138,9 +139,10 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     /** 处理单张工单详情读取请求，并投影为有界内联结果。 */
-    async ({ profile, ticket }) => {
+    async ({ profile, ticket }, extra) => {
       try {
-        return textResult({ ok: true, ticket: await (await getApplication()).getTicketInline(profile, ticket) });
+        const app = await getApplication();
+        return textResult({ ok: true, ticket: await app.withBrowserAuthRecovery(profile, () => app.getTicketInline(profile, ticket), extra.signal) });
       } catch (error) {
         return errorResult(error);
       }
@@ -156,7 +158,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     /** 处理单张工单或冻结查询选择的导出计划/写入请求。 */
-    async (input) => {
+    async (input, extra) => {
       try {
         if ((input as unknown) === invalidTicketExportInput) {
           throw new TicketError("QUERY_INVALID", "ticket_export input does not match the V1 export schema");
@@ -164,8 +166,8 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
         const { profile, ticket, query, selection, mode, media } = input;
         const app = await getApplication();
         if (ticket && query) throw new TicketError("QUERY_INVALID", "ticket_export accepts either ticket or query, not both");
-        if (ticket) return textResult({ ok: true, export: await app.exportTicket(profile, ticket, mode, media) });
-        if (query) return textResult({ ok: true, export: await app.exportTicketSearch(profile, query, mode, media, selection) });
+        if (ticket) return textResult({ ok: true, export: await app.withBrowserAuthRecovery(profile, () => app.exportTicket(profile, ticket, mode, media), extra.signal) });
+        if (query) return textResult({ ok: true, export: await app.withBrowserAuthRecovery(profile, () => app.exportTicketSearch(profile, query, mode, media, selection, extra.signal), extra.signal) });
         throw new TicketError("QUERY_INVALID", "ticket_export requires ticket or query");
       } catch (error) {
         return errorResult(error);

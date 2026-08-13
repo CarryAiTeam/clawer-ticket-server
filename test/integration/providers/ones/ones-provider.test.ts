@@ -9,7 +9,7 @@ import { OnesConfig, parseConfig } from "../../../../src/providers/ones/ones-con
 import { HttpClient, HttpRequest, HttpResponse, parseJsonResponse } from "../../../../src/infrastructure/http/fetch-http-client.js";
 import { TicketSearchQuery } from "../../../../src/modules/tickets/domain/ticket.js";
 import { TicketError } from "../../../../src/modules/tickets/domain/ticket-error.js";
-import { TicketBundleStore, TicketProfile, TicketProvider } from "../../../../src/modules/tickets/domain/ports.js";
+import { BrowserSessionProvider, TicketBundleStore, TicketProfile, TicketProvider } from "../../../../src/modules/tickets/domain/ports.js";
 import { compileOnesTicketSearchVariables, OnesGraphqlSource } from "../../../../src/providers/ones/ones-graphql-source.js";
 import { OnesBrowserSource } from "../../../../src/providers/ones/ones-browser-source.js";
 import { OnesRawTicketData } from "../../../../src/providers/ones/ones-contracts.js";
@@ -76,7 +76,7 @@ const rawTicket: OnesRawTicketData = {
 
 function ticketProfile(config: OnesConfig, name = "demo"): TicketProfile {
   const profile = config.profiles[name]!;
-  return { name, providerId: profile.provider, connector: profile.source, allowedProjects: profile.allowedProjects, inlineMaxChars: profile.inlineMaxChars };
+  return { name, providerId: profile.provider, connector: profile.source, allowedProjects: profile.allowedProjects, inlineMaxChars: profile.inlineMaxChars, maxConcurrent: profile.requestBudget.maxConcurrent };
 }
 
 function createApplication(config: OnesConfig, provider: TicketProvider, bundleStore: LocalTicketBundleStore, browserSessions?: OnesBrowserSource): TicketApplication {
@@ -472,6 +472,146 @@ try {
   assert.equal(partialQueryWrite.completedCount, 1);
   assert.deepEqual(partialQueryWrite.failedTickets, [{ ticketId: "query-task-2", code: "UNEXPECTED", message: "Ticket export failed unexpectedly" }]);
   assert.equal(queryWriteSessions, 1, "a streamed query write must write completed tickets without keeping later details in memory");
+
+  const recoverableProvider: TicketProvider = {
+    providerId: "ones",
+    async status() { return { configured: true, authorized: true, diagnostics: [] }; },
+    async search() { throw new Error("not used"); },
+    async getTicket() {
+      if (recoveryAttempts++ === 0) throw new TicketError("SOURCE_UNAUTHORIZED", "browser authentication is required");
+      return normalizeOnesTicket(config.profiles.demo!, rawTicket);
+    },
+  };
+  let recoveryAttempts = 0;
+  let closeCalls = 0;
+  const automaticSession: BrowserSessionProvider = {
+    async openBrowserSession() {
+      return { url: "https://tenant.example.test", message: "automatic", authentication: { mode: "auto", authorized: true, diagnostics: [] }, created: true };
+    },
+    async closeBrowserSession() { closeCalls += 1; },
+  };
+  const recoveryApplication = new TicketApplication({
+    profiles: new StaticTicketProfileResolver([ticketProfile(config)]),
+    provider: recoverableProvider,
+    bundleStore: queryBundleStore,
+    redaction: config.storage.redaction,
+    browserSessions: automaticSession,
+  });
+  await recoveryApplication.withBrowserAuthRecovery("demo", () => recoveryApplication.getTicket("demo", { id: "task-1" }));
+  assert.equal(recoveryAttempts, 2, "authorization recovery must retry the original operation once");
+  assert.equal(closeCalls, 1, "a successfully auto-created browser session must be closed after a successful retry");
+
+  recoveryAttempts = 0;
+  closeCalls = 0;
+  await assert.rejects(
+    () => recoveryApplication.withBrowserAuthRecovery("demo", async () => {
+      if (recoveryAttempts++ === 0) throw new TicketError("SOURCE_UNAUTHORIZED", "browser authentication is required");
+      throw new Error("retry failed");
+    }),
+    /retry failed/,
+  );
+  assert.equal(closeCalls, 1, "a successfully auto-created browser session must be closed when the retry fails");
+
+  const existingSessionApplication = new TicketApplication({
+    profiles: new StaticTicketProfileResolver([ticketProfile(config)]),
+    provider: recoverableProvider,
+    bundleStore: queryBundleStore,
+    redaction: config.storage.redaction,
+    browserSessions: {
+      async openBrowserSession() {
+        return { url: "https://tenant.example.test", message: "existing", authentication: { mode: "manual", authorized: true, diagnostics: [] }, created: false };
+      },
+      async closeBrowserSession() { closeCalls += 1; },
+    },
+  });
+  recoveryAttempts = 0;
+  closeCalls = 0;
+  await existingSessionApplication.withBrowserAuthRecovery("demo", () => existingSessionApplication.getTicket("demo", { id: "task-1" }));
+  assert.equal(closeCalls, 0, "an explicitly opened browser session must remain open after recovery");
+
+  const challengeApplication = new TicketApplication({
+    profiles: new StaticTicketProfileResolver([ticketProfile(config)]),
+    provider: recoverableProvider,
+    bundleStore: queryBundleStore,
+    redaction: config.storage.redaction,
+    browserSessions: {
+      async openBrowserSession() {
+        return { url: "https://tenant.example.test", message: "challenge", authentication: { mode: "manual", authorized: false, diagnostics: ["MFA"] }, created: true };
+      },
+      async closeBrowserSession() { closeCalls += 1; },
+    },
+  });
+  recoveryAttempts = 0;
+  closeCalls = 0;
+  await assert.rejects(
+    () => challengeApplication.withBrowserAuthRecovery("demo", () => challengeApplication.getTicket("demo", { id: "task-1" })),
+    (error: unknown) => error instanceof TicketError && error.code === "HUMAN_ACTION_REQUIRED",
+  );
+  assert.equal(closeCalls, 0, "an unresolved MFA or SSO challenge must remain visible for the user");
+
+  const poolEvents: string[] = [];
+  const poolCompletions = new Map<string, () => void>();
+  const poolProvider: TicketProvider = {
+    providerId: "ones",
+    async status() { return { configured: true, authorized: true, diagnostics: [] }; },
+    async search() {
+      return {
+        items: ["pool-1", "pool-2", "pool-3", "pool-4", "pool-5"].map((id) => ({ id, title: id, projectId: "project-demo" })),
+        page: { returned: 5, totalCount: 5, hasNextPage: false },
+      };
+    },
+    async getTicket(profile, reference) {
+      poolEvents.push(`get:${reference.id}`);
+      const normalized = normalizeOnesTicket(config.profiles[profile.name]!, rawTicket);
+      return { ...normalized, source: { ...normalized.source, ticketId: reference.id } };
+    },
+  };
+  const poolBundleStore: TicketBundleStore = {
+    async plan() { throw new Error("write test must not plan"); },
+    async beginExport(ticket) {
+      const id = ticket.source.ticketId;
+      poolEvents.push(`begin:${id}`);
+      return {
+        missingMedia: [],
+        async writeMedia() {},
+        async commit() {
+          poolEvents.push(`commit:${id}`);
+          await new Promise<void>((resolve) => poolCompletions.set(id, resolve));
+          return { directory: `D:/pool/${id}`, files: [], contentHash: id, action: "created" as const, exportId: id, status: "created" as const };
+        },
+        async abort() {},
+      };
+    },
+  };
+  const poolApplication = new TicketApplication({
+    profiles: new StaticTicketProfileResolver([{ ...ticketProfile(config), maxConcurrent: 3 }]),
+    provider: poolProvider,
+    bundleStore: poolBundleStore,
+    redaction: config.storage.redaction,
+  });
+  const poolExport = poolApplication.exportTicketSearch("demo", { scope: "project", state: "all" }, "write", "metadata");
+  while (poolCompletions.size < 3) await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(poolEvents.filter((event) => event.startsWith("get:")), ["get:pool-1", "get:pool-2", "get:pool-3"], "three workers must start the first three tickets only");
+  poolCompletions.get("pool-2")!();
+  while (!poolEvents.includes("get:pool-4")) await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(!poolEvents.includes("get:pool-5"), "a free worker must replenish one ticket without waiting for the other two workers");
+  poolCompletions.get("pool-1")!();
+  while (!poolEvents.includes("get:pool-5")) await new Promise((resolve) => setTimeout(resolve, 0));
+  poolCompletions.get("pool-3")!();
+  while (poolCompletions.size < 5) await new Promise((resolve) => setTimeout(resolve, 0));
+  poolCompletions.get("pool-4")!();
+  poolCompletions.get("pool-5")!();
+  const pooledResult = await poolExport;
+  assert.deepEqual(pooledResult.completedTickets.map(({ ticketId }) => ticketId), ["pool-2", "pool-1", "pool-3", "pool-4", "pool-5"], "completedTickets must preserve actual completion order");
+  assert.deepEqual(pooledResult.exports.map((artifact) => "exportId" in artifact ? artifact.exportId : undefined), ["pool-1", "pool-2", "pool-3", "pool-4", "pool-5"], "exports must stay in query order");
+
+  const cancelled = new AbortController();
+  cancelled.abort();
+  await assert.rejects(
+    () => poolApplication.exportTicketSearch("demo", { scope: "project", state: "all" }, "write", "metadata", undefined, cancelled.signal),
+    (error: unknown) => error instanceof TicketError && error.code === "REQUEST_CANCELLED",
+    "a cancelled batch must stop before workers claim another ticket instead of reporting a partial success",
+  );
 
   const plan = await application.exportTicket("demo", { id: "task-1" }, "plan", "metadata");
   assert.equal(plan.action, "created");

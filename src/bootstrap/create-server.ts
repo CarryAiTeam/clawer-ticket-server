@@ -20,6 +20,7 @@ function ticketProfiles(config: Awaited<ReturnType<typeof loadConfig>>) {
       connector: profile.source,
       allowedProjects: profile.allowedProjects,
       inlineMaxChars: profile.inlineMaxChars,
+      maxConcurrent: profile.requestBudget.maxConcurrent,
     })),
   );
 }

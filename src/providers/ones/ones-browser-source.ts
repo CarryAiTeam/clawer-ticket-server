@@ -3,7 +3,7 @@ import { chromium, Browser, BrowserContext, Page } from "playwright-core";
 import { OnesConfig, OnesProfile } from "./ones-config.js";
 import { TicketAttachment } from "../../modules/tickets/domain/ticket.js";
 import { TicketError as OnesError } from "../../modules/tickets/domain/ticket-error.js";
-import { BrowserSessionProvider, ConnectionStatus, TicketMediaDownload, TicketMediaDownloadOptions, TicketProfile } from "../../modules/tickets/domain/ports.js";
+import { BrowserSessionProvider, BrowserSessionStatus, ConnectionStatus, TicketMediaDownload, TicketMediaDownloadOptions, TicketProfile } from "../../modules/tickets/domain/ports.js";
 import { HttpResponse, parseJsonResponse } from "../../infrastructure/http/fetch-http-client.js";
 import { OnesGraphqlSource, myOpenTicketSearchQuery } from "./ones-graphql-source.js";
 
@@ -67,13 +67,10 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
   }
 
   /** 打开可见浏览器，并在配置直登时等待 ONES 授权探测结果。 */
-  async openBrowserSession(ticketProfile: TicketProfile): Promise<{
-    url: string;
-    message: string;
-    authentication: { mode: "auto" | "manual"; authorized: boolean; diagnostics: string[] };
-  }> {
+  async openBrowserSession(ticketProfile: TicketProfile): Promise<BrowserSessionStatus> {
     const profile = this.profileFor(ticketProfile);
     if (profile.source !== "browser") throw new OnesError("CONFIG_INVALID", "This profile is configured for direct GraphQL, not the interactive browser source");
+    const created = !this.page || this.page.isClosed();
     const page = await this.ensurePage(ticketProfile.name, profile);
     const autoLoginConfigured = Boolean(profile.browser?.autoLogin);
     const authorization = autoLoginConfigured
@@ -91,6 +88,7 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
         authorized: authorization.authorized,
         diagnostics: authorization.diagnostics,
       },
+      created,
     };
   }
 

@@ -31,8 +31,8 @@ const profileSchema = z.object({
     })
     .default({ headerName: "Authorization", scheme: "Bearer" }),
   requestBudget: z
-    .object({ maxConcurrent: z.literal(1).default(1), maxRequestsPerMinute: z.number().int().min(1).max(120).default(20) })
-    .default({ maxConcurrent: 1, maxRequestsPerMinute: 20 }),
+    .object({ maxConcurrent: z.number().int().min(1).max(3).default(3), maxRequestsPerMinute: z.number().int().min(1).max(120).default(20) })
+    .default({ maxConcurrent: 3, maxRequestsPerMinute: 20 }),
   inlineMaxChars: z.number().int().min(1_000).max(100_000).default(12_000),
   classificationRules: z.array(classificationRuleSchema).default([]),
   browser: z.object({

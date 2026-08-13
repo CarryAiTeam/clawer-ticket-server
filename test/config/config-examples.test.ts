@@ -16,7 +16,7 @@ for (const example of examples) {
 
 const browserExample = parseConfig(JSON.parse(await readFile(new URL("../../config/clawer-ticket.config.browser.example.json", import.meta.url), "utf8")) as unknown);
 const browserProfile = browserExample.profiles["ones-browser-my-open"]!;
-assert.equal(browserProfile.requestBudget.maxConcurrent, 1);
+assert.equal(browserProfile.requestBudget.maxConcurrent, 3);
 assert.equal(browserProfile.requestBudget.maxRequestsPerMinute, 20);
 assert.equal(browserProfile.browser?.autoLogin?.email, "replace-with-local-login@example.com");
 assert.equal(browserProfile.browser?.autoLogin?.password, "REPLACE_WITH_LOCAL_PASSWORD");
