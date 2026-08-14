@@ -1,0 +1,18 @@
+{
+  "query": "query SearchTickets { buckets { tasks { pageInfo { hasNextPage } } } }",
+  "variables": {
+    "groupBy": { "tasks": {} },
+    "groupOrderBy": null,
+    "orderBy": { "createTime": "DESC" },
+    "filterGroup": [
+      {
+        "name_match": "111",
+        "issueType_in": ["WjULPrZa"],
+        "statusCategory_in": ["to_do", "in_progress"],
+        "assign_in": ["$currentUser"]
+      }
+    ],
+    "search": null,
+    "pagination": { "limit": 50, "preciseCount": false }
+  }
+}

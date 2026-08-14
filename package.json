@@ -4,7 +4,7 @@
   "description": "Generic ticket-ingestion MCP server",
   "main": "./dist/index.js",
   "bin": {
-    "clawer-ticket-server": "./dist/index.js"
+    "clawer-ticket-server": "dist/index.js"
   },
   "files": [
     "dist",

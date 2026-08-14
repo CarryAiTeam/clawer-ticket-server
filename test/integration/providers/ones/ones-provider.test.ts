@@ -818,15 +818,15 @@ try {
     sort: { field: "createTime", direction: "desc" },
     page: { size: 50 },
   };
-  const fixtureDirectory = join(process.cwd(), ".cloudpivot-cli", "task-runs", "ticket-tool-surface-design");
-  const readFixture = async (file: string) => JSON.parse(await readFile(join(fixtureDirectory, file), "utf8")) as { query: string; variables: Record<string, unknown> };
+  const fixtureDirectory = new URL("../../../fixtures/ones/graphql/", import.meta.url);
+  const readFixture = async (file: string) => JSON.parse(await readFile(new URL(file, fixtureDirectory), "utf8")) as { query: string; variables: Record<string, unknown> };
   const profileWithoutProjectConstraint = { ...config.profiles.demo!, allowedProjects: [] };
   const myOpenFixture = await readFixture("ones-items-graphql-my-open-status-category-not-in-done-assignee-me.request.json");
-  assert.match(myOpenFixture.query, /pageInfo[\s\S]*hasNextPage/, "the archived real request must retain the observed pageInfo fields");
+  assert.match(myOpenFixture.query, /pageInfo[\s\S]*hasNextPage/, "the fixture must retain the observed pageInfo fields");
   assert.deepEqual(
     compileOnesTicketSearchVariables(profileWithoutProjectConstraint, graphSearchQuery),
     myOpenFixture.variables,
-    "self/open compilation must match the archived real ONES request variables when no profile project constraint is added",
+    "self/open compilation must match the captured ONES request variables when no profile project constraint is added",
   );
   const lazyLoadFixture = await readFixture("ones-items-graphql-lazy-load-after-status-not-in-assignee-not-in-me.request.json");
   const lazyPagination = lazyLoadFixture.variables.pagination as { limit: number; after: string; preciseCount?: unknown };
@@ -836,11 +836,11 @@ try {
   assert.deepEqual(
     compileOnesTicketSearchVariables(profileWithoutProjectConstraint, { ...graphSearchQuery, page: { size: 50, after: lazyPagination.after } }).pagination,
     lazyPagination,
-    "a continuation must compile the archived after shape without reintroducing preciseCount",
+    "a continuation must compile the captured after shape without reintroducing preciseCount",
   );
   const projectFixture = await readFixture("ones-items-graphql-project-field-in-assignee-in-redacted.request.json");
   const projectFixtureFilter = (projectFixture.variables.filterGroup as Array<Record<string, unknown>>)[0];
-  assert.ok(projectFixtureFilter && "_CFcrFX1y_in" in projectFixtureFilter, "the archived project filter stays evidence for a deferred capability, not a public V1 filter");
+  assert.ok(projectFixtureFilter && "_CFcrFX1y_in" in projectFixtureFilter, "the captured project filter stays evidence for a deferred capability, not a public V1 filter");
   const firstProviderSearch = await graphql.search(ticketProfile(config), graphSearchQuery);
   assert.equal(firstProviderSearch.page.returned, 1);
   assert.equal(firstProviderSearch.page.totalCount, 2);
@@ -890,7 +890,7 @@ try {
   assert.deepEqual(
     compileOnesTicketSearchVariables(profileWithoutProjectConstraint, searchQuery),
     titleFixture.variables,
-    "title, issue type, status category, and current-user compilation must match the archived real request variables",
+    "title, issue type, status category, and current-user compilation must match the captured request variables",
   );
   assert.deepEqual(compileOnesTicketSearchVariables(config.profiles.demo!, searchQuery), {
     groupBy: { tasks: {} },

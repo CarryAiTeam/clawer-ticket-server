@@ -1,0 +1,16 @@
+{
+  "query": "query SearchTickets { buckets { tasks { pageInfo { hasNextPage } } } }",
+  "variables": {
+    "groupBy": { "tasks": {} },
+    "groupOrderBy": null,
+    "orderBy": { "createTime": "DESC" },
+    "filterGroup": [
+      {
+        "_CFcrFX1y_in": ["<redacted-project-id-1>", "<redacted-project-id-2>"],
+        "assign_in": ["<redacted-user-id>"]
+      }
+    ],
+    "search": null,
+    "pagination": { "limit": 50, "preciseCount": false }
+  }
+}

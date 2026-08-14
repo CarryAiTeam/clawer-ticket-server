@@ -1,0 +1,16 @@
+{
+  "query": "query SearchTickets { buckets { tasks { pageInfo { hasNextPage } } } }",
+  "variables": {
+    "groupBy": { "tasks": {} },
+    "groupOrderBy": null,
+    "orderBy": { "createTime": "DESC" },
+    "filterGroup": [
+      {
+        "statusCategory_notIn": ["done"],
+        "assign_notIn": ["$currentUser"]
+      }
+    ],
+    "search": null,
+    "pagination": { "limit": 50, "after": "<redacted-after-cursor>" }
+  }
+}
