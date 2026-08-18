@@ -30,5 +30,6 @@
 
 - `EXPORT_LIMIT_EXCEEDED`：缩小范围或分批；不要盲目重试。
 - `complete: false`：检查 `failedTickets`；重新 plan 后仅继续失败项，已成功 bundle 可幂等复用。
-- `SOURCE_UNAUTHORIZED` / `HUMAN_ACTION_REQUIRED`：服务端只自动恢复一次。MFA、CAPTCHA、SSO 等挑战保留页面，用户完成后重试。
+- `SOURCE_UNAUTHORIZED` / `HUMAN_ACTION_REQUIRED`：服务端只自动恢复一次。仅在 `details.authorizationState: "manual-action-required"` 时保留页面并要求用户完成实际操作。
+- `AUTHORIZATION_PENDING`：自动登录已提交但会话仍在结算；保持页面后只重试原导出一次，不要求用户登录或完成 MFA、CAPTCHA、SSO。
 - 自动创建并授权的会话由服务端在终态清理；显式连接的会话由调用方断开。

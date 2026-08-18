@@ -17,11 +17,16 @@ export interface TicketProfileResolver {
   resolve(name?: string): TicketProfile;
 }
 
+/** browser 授权探测的受控状态；不携带页面、Cookie 或厂商原始响应。 */
+export type BrowserAuthorizationState = "authorized" | "pending" | "manual-action-required";
+
 export interface ConnectionStatus {
   configured: boolean;
   authorized: boolean;
   diagnostics: string[];
   credentialAvailable?: boolean;
+  /** browser connector 可选提供，保留现有 provider 的兼容性。 */
+  authorizationState?: BrowserAuthorizationState;
 }
 
 /** provider 返回已校验的规范数据；原始厂商接口不跨越此边界。 */
@@ -73,6 +78,8 @@ export interface BrowserSessionStatus {
     mode: "auto" | "manual";
     authorized: boolean;
     diagnostics: string[];
+    /** browser provider 总会返回；可选字段避免破坏第三方 session provider。 */
+    state?: BrowserAuthorizationState;
   };
   /** 本次调用是否实际新建了浏览器会话，而非复用已存在的显式会话。 */
   created: boolean;

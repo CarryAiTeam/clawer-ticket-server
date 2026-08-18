@@ -177,7 +177,19 @@ export class TicketApplication {
     const selected = this.profile(profile);
     const session = await this.browserSessions().openBrowserSession(selected);
     if (!session.authentication.authorized) {
-      throw new TicketError("HUMAN_ACTION_REQUIRED", "ONES browser authorization was not confirmed; complete any challenge in the visible browser session and retry");
+      const authorizationState = session.authentication.state ?? "manual-action-required";
+      if (authorizationState === "pending") {
+        throw new TicketError(
+          "AUTHORIZATION_PENDING",
+          "ONES automatic sign-in was submitted, but browser authorization is still pending. Keep the visible browser session open and retry the same ticket operation shortly.",
+          { authorizationState: "pending", diagnostics: session.authentication.diagnostics },
+        );
+      }
+      throw new TicketError(
+        "HUMAN_ACTION_REQUIRED",
+        "ONES requires an action in the visible browser session before retrying.",
+        { authorizationState: "manual-action-required", diagnostics: session.authentication.diagnostics },
+      );
     }
     try {
       this.throwIfAborted(signal);

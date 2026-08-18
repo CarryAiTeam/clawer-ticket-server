@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "scenarios": [
     {
       "id": "retrieve-new-ticket-download-media",
@@ -75,6 +75,16 @@
         { "tool": "ticket_browser_connect", "outcome": "HUMAN_ACTION_REQUIRED", "purpose": "leave-visible-challenge" }
       ],
       "policy": { "auth": "challenge", "cleanup": "leave-open" }
+    },
+    {
+      "id": "automatic-authorization-pending",
+      "route": "detail",
+      "request": "读取自动登录尚在生效的工单",
+      "calls": [
+        { "tool": "ticket_search", "outcome": "AUTHORIZATION_PENDING", "purpose": "automatic-authorization-pending" },
+        { "tool": "ticket_search", "retryOf": 0, "purpose": "retry-original-read" }
+      ],
+      "policy": { "auth": "pending", "retryOnce": true, "cleanup": "if-session" }
     },
     {
       "id": "numeric-not-found",

@@ -28,11 +28,16 @@ export class FetchHttpClient implements HttpClient {
 
 /** 校验通用 JSON 响应，并映射为可由上层处理的领域错误。 */
 export function parseJsonResponse(response: HttpResponse): unknown {
+  const isJson = response.headers.get("content-type")?.toLocaleLowerCase().includes("application/json") ?? false;
+  // HTTP status alone cannot establish that an interactive authentication step exists.
+  // A non-JSON challenge page is the controlled evidence needed for that classification.
+  if (!isJson && /captcha|challenge|mfa|sso/i.test(response.text)) {
+    throw new TicketError("HUMAN_ACTION_REQUIRED", "Source requires human authentication action");
+  }
   if (response.status === 401 || response.status === 403) throw new TicketError("SOURCE_UNAUTHORIZED", `Source returned ${response.status}`);
   if (response.status === 429) throw new TicketError("SOURCE_RATE_LIMITED", "Source rate limit reached");
   if (response.status < 200 || response.status >= 300) throw new TicketError("SOURCE_FAILED", `Source returned ${response.status}`);
-  if (/captcha|challenge|mfa/i.test(response.text)) throw new TicketError("HUMAN_ACTION_REQUIRED", "Source requires human authentication action");
-  if (!response.headers.get("content-type")?.toLocaleLowerCase().includes("application/json")) {
+  if (!isJson) {
     throw new TicketError("SOURCE_SCHEMA_CHANGED", "Source response is not JSON");
   }
   try {
