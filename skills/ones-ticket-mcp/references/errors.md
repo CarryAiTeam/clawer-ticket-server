@@ -13,5 +13,6 @@
 | `QUERY_INVALID` / `UNSUPPORTED_FILTER` | 用受控 `scope`、`state`、`where` 重构；冲突意图才请用户澄清。 |
 | `QUERY_CURSOR_INVALID` | 从原始查询第一页重新开始。 |
 | `SELECTION_CHANGED` | 重新 plan 并展示变化后的范围；不要静默写入新选择。 |
+| `EXPORT_CONFIRMATION_REQUIRED` | 这不是下载成功。展示冻结数量并等待明确确认；再以完全相同的 query、media 和 details 中的 selection 调用一次。 |
 | `EXPORT_LIMIT_EXCEEDED` | 缩小范围或分批。 |
 | `SOURCE_RATE_LIMITED` / `SOURCE_FAILED` / `SOURCE_SCHEMA_CHANGED` | 不重复造成压力的相同调用；简洁报告来源异常及可重试条件。 |

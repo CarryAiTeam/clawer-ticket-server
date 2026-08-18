@@ -8,7 +8,8 @@
       "removeFields": ["phone", "email"]
     },
     "exportLimits": {
-      "maxItems": 50,
+      "autoDownloadThreshold": 50,
+      "maxItems": 2000,
       "maxAttachments": 500,
       "maxAttachmentBytes": 52428800,
       "maxTotalBytes": 536870912

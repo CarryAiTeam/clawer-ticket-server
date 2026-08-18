@@ -22,7 +22,8 @@ assert.equal(browserProfile.browser?.autoLogin?.email, "replace-with-local-login
 assert.equal(browserProfile.browser?.autoLogin?.password, "REPLACE_WITH_LOCAL_PASSWORD");
 assert.equal("listAssigneeFieldId" in browserProfile, false);
 assert.deepEqual(browserExample.storage.exportLimits, {
-  maxItems: 50,
+  autoDownloadThreshold: 50,
+  maxItems: 2_000,
   maxAttachments: 500,
   maxAttachmentBytes: 50 * 1024 * 1024,
   maxTotalBytes: 512 * 1024 * 1024,
@@ -35,5 +36,41 @@ assert.equal(referenceGraphql.classificationRules[0]?.fieldId, "REPLACE_WITH_CLA
 assert.equal(referenceBrowser.browser?.autoLogin?.loginUrl, "https://tickets.example.com/login");
 assert.equal("defaultView" in referenceGraphql, false);
 assert.equal("myOpenViewUrl" in (referenceBrowser.browser ?? {}), false);
+
+assert.throws(
+  () => parseConfig({
+    schemaVersion: "1.0",
+    storage: { root: "D:/ticket-exports", exportLimits: { maxItems: 2_001 } },
+    profiles: {
+      browser: {
+        source: "browser",
+        product: "project",
+        baseUrl: "https://tickets.example.com",
+        teamId: "team",
+        allowedHosts: ["tickets.example.com"],
+      },
+    },
+  }),
+  /Invalid configuration: storage.exportLimits.maxItems/,
+  "configuration must reject a maxItems value above the 2,000 hard limit",
+);
+
+assert.throws(
+  () => parseConfig({
+    schemaVersion: "1.0",
+    storage: { root: "D:/ticket-exports", exportLimits: { autoDownloadThreshold: 51, maxItems: 50 } },
+    profiles: {
+      browser: {
+        source: "browser",
+        product: "project",
+        baseUrl: "https://tickets.example.com",
+        teamId: "team",
+        allowedHosts: ["tickets.example.com"],
+      },
+    },
+  }),
+  /Invalid configuration: storage.exportLimits.autoDownloadThreshold/,
+  "configuration must reject an automatic threshold above maxItems",
+);
 
 console.log("Public configuration examples validate against the runtime schema.");

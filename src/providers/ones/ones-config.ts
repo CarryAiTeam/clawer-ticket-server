@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import * as z from "zod/v4";
 import { TicketClass } from "../../modules/tickets/domain/ticket.js";
 import { TicketError } from "../../modules/tickets/domain/ticket-error.js";
-import { DEFAULT_TICKET_EXPORT_LIMITS } from "../../modules/tickets/domain/ticket-export.js";
+import { DEFAULT_TICKET_EXPORT_LIMITS, MAX_TICKET_EXPORT_ITEMS } from "../../modules/tickets/domain/ticket-export.js";
 
 const classificationRuleSchema = z.object({
   name: z.string().min(1),
@@ -55,12 +55,17 @@ const profileSchema = z.object({
 });
 
 const exportLimitsSchema = z.object({
-  /** 查询型导出默认只允许小批量；更大的范围应由调用方拆分。 */
-  maxItems: z.number().int().min(1).max(10_000).default(DEFAULT_TICKET_EXPORT_LIMITS.maxItems),
+  /** 无需再次确认即可直接写入的查询选择数量。 */
+  autoDownloadThreshold: z.number().int().min(1).max(MAX_TICKET_EXPORT_ITEMS).default(DEFAULT_TICKET_EXPORT_LIMITS.autoDownloadThreshold),
+  /** 同步查询导出的硬上限；配置不得提高到 2,000 以上。 */
+  maxItems: z.number().int().min(1).max(MAX_TICKET_EXPORT_ITEMS).default(DEFAULT_TICKET_EXPORT_LIMITS.maxItems),
   maxAttachments: z.number().int().min(1).max(100_000).default(DEFAULT_TICKET_EXPORT_LIMITS.maxAttachments),
   maxAttachmentBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_TICKET_EXPORT_LIMITS.maxAttachmentBytes),
   maxTotalBytes: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_TICKET_EXPORT_LIMITS.maxTotalBytes),
 }).strict().superRefine((limits, context) => {
+  if (limits.autoDownloadThreshold > limits.maxItems) {
+    context.addIssue({ code: "custom", path: ["autoDownloadThreshold"], message: "autoDownloadThreshold cannot exceed maxItems" });
+  }
   if (limits.maxAttachmentBytes > limits.maxTotalBytes) {
     context.addIssue({ code: "custom", path: ["maxAttachmentBytes"], message: "maxAttachmentBytes cannot exceed maxTotalBytes" });
   }

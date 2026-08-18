@@ -15,6 +15,7 @@ export type TicketErrorCode =
   | "UNSUPPORTED_FILTER"
   | "QUERY_CURSOR_INVALID"
   | "SELECTION_CHANGED"
+  | "EXPORT_CONFIRMATION_REQUIRED"
   | "EXPORT_LIMIT_EXCEEDED"
   | "EXPORT_ROOT_DENIED"
   | "PROVIDER_NOT_AVAILABLE"
@@ -24,6 +25,13 @@ export type TicketErrorCode =
 export interface TicketErrorDetails {
   authorizationState?: "pending" | "manual-action-required";
   diagnostics?: string[];
+  confirmation?: {
+    selectedCount: number;
+    autoDownloadThreshold: number;
+    maxItems: number;
+    selection: { expectedCount: number; fingerprint: string };
+    query: { scope: string; state: string; fingerprint: string; mediaMode: "metadata" | "download" };
+  };
 }
 
 /** 工单用例与 MCP 结果映射对外暴露的 provider 无关错误。 */

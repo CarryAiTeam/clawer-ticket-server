@@ -14,7 +14,7 @@
 ## 导出模式
 
 - 同一请求包含“计划、预览、先看看、先查看导出范围、先给我计划”等预览词和本地导出目标时，调用 `ticket_export` 并显式传 `mode: "plan"`；只返回计划，不写入。
-- “获取、下载到本地、导出、保存到本地、获取到本地、同步到本地、同步更新本地”的查询请求使用 `ticket_export({ query, mode: "write", media: "download" })` 完整写入；这些请求本身就是写入授权，不再要求用户重复确认。仅在用户明确不要图片、附件或媒体时使用 `media: "metadata"`。
+- “获取、下载到本地、导出、保存到本地、获取到本地、同步到本地、同步更新本地”的查询请求先使用 `ticket_export({ query, mode: "write", media: "download" })`。这些请求本身是写入授权：1–50 条直接完整写入；若服务返回 `EXPORT_CONFIRMATION_REQUIRED`（51–2,000 条），展示冻结数量，取得明确确认后才以相同 query、media、selection 再次调用。仅在用户明确不要图片、附件或媒体时使用 `media: "metadata"`。
 - “先看看/查看/查询/列出我的工单”但没有导出目标时仍是 `ticket_search`，不是导出计划。
 - 用户后续说“按刚才计划导出”时，使用此前计划的完全相同 query、selection 与 media 调用 `mode: "write"`。
 

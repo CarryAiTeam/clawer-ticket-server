@@ -156,7 +156,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_export",
     {
       title: "Export a ticket work item",
-      description: "Local export for 获取、下载到本地、导出或保存到本地. It fetches complete normalized details including comments and attachment-backed images. Query.statuses accepts exact ONES display status names such as 新建; query writes export the complete matching selection in one call. Defaults to mode=write with media=download for a direct local export; use mode=plan only when the caller explicitly requests a preview. Query writes with a selection returned by a prior plan validate that frozen selection. Item/media budgets are enforced and results include completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
+      description: "Local export for 获取、下载到本地、导出或保存到本地. It fetches complete normalized details including comments and attachment-backed images. Query.statuses accepts exact ONES display status names such as 新建. A query selection of up to 50 writes completely in one call; 51–2,000 first returns EXPORT_CONFIRMATION_REQUIRED with a frozen selection and performs no writes, then the same query, media, and selection must be sent after user confirmation. Query writes always enumerate internally in fixed 50-item cursor pages; page is not a public export parameter. Defaults to mode=write with media=download; mode=plan remains a complete no-write plan. Item/media budgets are enforced and results include completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
       inputSchema: ticketExportInputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },

@@ -105,7 +105,7 @@ try {
   const mediaExportPayload = responseJson(mediaExport);
   const singleExportBudget = (mediaExportPayload.export as { budget: { mediaMode: string; limits: { maxItems: number } } }).budget;
   assert.equal(singleExportBudget.mediaMode, "download");
-  assert.equal(singleExportBudget.limits.maxItems, 50);
+  assert.equal(singleExportBudget.limits.maxItems, 2_000);
   const plansBeforeExplicitPreview = plannedExportCount;
   const commitsBeforeExplicitPreview = committedExportCount;
   const explicitPreview = await client.callTool({ name: "ticket_export", arguments: { profile: "test", ticket: { id: "task-test" }, mode: "plan" } });
@@ -280,7 +280,7 @@ try {
     provider,
     bundleStore,
     redaction: { omitPeople: false, removeFields: [] },
-    exportLimits: { maxItems: 1 },
+    exportLimits: { autoDownloadThreshold: 1, maxItems: 1 },
   });
   await assert.rejects(
     () => limitedApplication.exportTicketSearch("test", { scope: "self", state: "open" }, "plan", "metadata"),
