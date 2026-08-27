@@ -177,7 +177,19 @@ export class TicketApplication {
     const selected = this.profile(profile);
     const session = await this.browserSessions().openBrowserSession(selected);
     if (!session.authentication.authorized) {
-      throw new TicketError("HUMAN_ACTION_REQUIRED", "ONES browser authorization was not confirmed; complete any challenge in the visible browser session and retry");
+      const authorizationState = session.authentication.state ?? "manual-action-required";
+      if (authorizationState === "pending") {
+        throw new TicketError(
+          "AUTHORIZATION_PENDING",
+          "ONES automatic sign-in was submitted, but browser authorization is still pending. Keep the visible browser session open and retry the same ticket operation shortly.",
+          { authorizationState: "pending", diagnostics: session.authentication.diagnostics },
+        );
+      }
+      throw new TicketError(
+        "HUMAN_ACTION_REQUIRED",
+        "ONES requires an action in the visible browser session before retrying.",
+        { authorizationState: "manual-action-required", diagnostics: session.authentication.diagnostics },
+      );
     }
     try {
       this.throwIfAborted(signal);
@@ -261,7 +273,8 @@ export class TicketApplication {
 
   /**
    * 对一个完整受控查询执行导出。plan 阶段返回有序 ID 集合的 fingerprint；直接 write
-   * 在同一调用中使用当前选择，带此前 plan selection 的 write 则重新枚举并拒绝集合变化。
+   * 在同一调用中使用当前选择；大范围 write 先返回冻结选择，带此前 selection
+   * 的 write 则重新枚举并拒绝集合、查询或媒体模式变化。
    */
   async exportTicketSearch(
     profile: string | undefined,
@@ -282,13 +295,32 @@ export class TicketApplication {
       : enumerated.filter((item) => item.status?.name !== undefined && resolved.statuses.includes(item.status.name));
     const frozenSelection = {
       expectedCount: summaries.length,
-      fingerprint: ticketSelectionFingerprint(resolved.fingerprint, summaries.map((item) => item.id)),
+      fingerprint: ticketSelectionFingerprint(`${resolved.fingerprint}:${mediaMode}`, summaries.map((item) => item.id)),
     };
     if (mode === "write" && selection) {
       const expected = validateSelection(selection);
       if (expected.expectedCount !== frozenSelection.expectedCount || expected.fingerprint !== frozenSelection.fingerprint) {
         throw new TicketError("SELECTION_CHANGED", "The query selection changed after plan; run ticket_export with mode plan again before writing");
       }
+    } else if (mode === "write" && summaries.length > this.exportLimits.autoDownloadThreshold) {
+      throw new TicketError(
+        "EXPORT_CONFIRMATION_REQUIRED",
+        `Ticket search matches ${summaries.length} items. Confirm the frozen selection before writing the complete export.`,
+        {
+          confirmation: {
+            selectedCount: summaries.length,
+            autoDownloadThreshold: this.exportLimits.autoDownloadThreshold,
+            maxItems: this.exportLimits.maxItems,
+            selection: frozenSelection,
+            query: {
+              scope: resolved.query.scope,
+              state: resolved.query.state,
+              fingerprint: resolved.fingerprint,
+              mediaMode,
+            },
+          },
+        },
+      );
     }
     // 每张详情只在处理该张导出时保留，避免大查询把完整工单全文全部驻留内存。
     const usage = this.emptyExportUsage();

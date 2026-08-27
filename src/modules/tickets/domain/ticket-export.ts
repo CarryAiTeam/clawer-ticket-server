@@ -2,15 +2,20 @@ import { TicketMediaMode, TicketMediaPlan } from "./ports.js";
 import { TicketAttachment } from "./ticket.js";
 import { TicketError } from "./ticket-error.js";
 
-/** 默认导出预算：足够覆盖日常小批量，同时避免一次请求枚举整个项目。 */
+/** 同步查询导出允许的最大工单数；不得用配置静默提高。 */
+export const MAX_TICKET_EXPORT_ITEMS = 2_000;
+
+/** 默认导出预算：小范围直接写入，较大范围必须先确认。 */
 export const DEFAULT_TICKET_EXPORT_LIMITS = Object.freeze({
-  maxItems: 50,
+  autoDownloadThreshold: 50,
+  maxItems: MAX_TICKET_EXPORT_ITEMS,
   maxAttachments: 500,
   maxAttachmentBytes: 50 * 1024 * 1024,
   maxTotalBytes: 512 * 1024 * 1024,
 });
 
 export interface TicketExportLimits {
+  autoDownloadThreshold: number;
   maxItems: number;
   maxAttachments: number;
   maxAttachmentBytes: number;
@@ -48,11 +53,15 @@ export function normalizeTicketExportLimits(value?: Partial<TicketExportLimits>)
     ...(value ?? {}),
   };
   const normalized = {
-    maxItems: positiveSafeInteger(limits.maxItems, "exportLimits.maxItems"),
+    autoDownloadThreshold: positiveSafeInteger(limits.autoDownloadThreshold, "exportLimits.autoDownloadThreshold"),
+    maxItems: positiveSafeInteger(limits.maxItems, "exportLimits.maxItems", MAX_TICKET_EXPORT_ITEMS),
     maxAttachments: positiveSafeInteger(limits.maxAttachments, "exportLimits.maxAttachments"),
     maxAttachmentBytes: positiveSafeInteger(limits.maxAttachmentBytes, "exportLimits.maxAttachmentBytes"),
     maxTotalBytes: positiveSafeInteger(limits.maxTotalBytes, "exportLimits.maxTotalBytes"),
   };
+  if (normalized.autoDownloadThreshold > normalized.maxItems) {
+    throw new TicketError("CONFIG_INVALID", "exportLimits.autoDownloadThreshold cannot exceed exportLimits.maxItems");
+  }
   if (normalized.maxAttachmentBytes > normalized.maxTotalBytes) {
     throw new TicketError("CONFIG_INVALID", "exportLimits.maxAttachmentBytes cannot exceed exportLimits.maxTotalBytes");
   }

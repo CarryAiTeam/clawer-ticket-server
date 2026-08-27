@@ -188,7 +188,7 @@ class ConnectTestBrowserSource extends OnesBrowserSource {
 
   constructor(
     config: OnesConfig,
-    private readonly authorizations: Array<{ authorized: boolean; diagnostics: string[] }>,
+    private readonly authorizations: Array<{ authorized: boolean; diagnostics: string[]; authorizationState?: "authorized" | "pending" | "manual-action-required" }>,
   ) {
     super(config);
   }
@@ -204,6 +204,42 @@ class ConnectTestBrowserSource extends OnesBrowserSource {
     const authorization = this.authorizations[Math.min(this.authorizationCall, this.authorizations.length - 1)]!;
     this.authorizationCall += 1;
     return { configured: true, credentialAvailable: true, ...authorization };
+  }
+}
+
+class StatusTestBrowserSource extends OnesBrowserSource {
+  constructor(config: OnesConfig, private readonly failure: TicketError) {
+    super(config);
+  }
+
+  bindPage(profileName: string, url: string): void {
+    const source = this as unknown as { page?: Page; activeProfileName?: string };
+    source.page = { isClosed: () => false, url: () => url } as unknown as Page;
+    source.activeProfileName = profileName;
+  }
+
+  override async search(): Promise<never> {
+    throw this.failure;
+  }
+}
+
+class RequestTestBrowserSource extends OnesBrowserSource {
+  constructor(config: OnesConfig, private readonly result: { status: number; text: string; contentType: string; csrfToken?: string; retryAfter?: string }) {
+    super(config);
+  }
+
+  bindPage(profileName: string): void {
+    const source = this as unknown as { page?: Page; activeProfileName?: string };
+    source.page = {
+      isClosed: () => false,
+      url: () => "https://tenant.example.test/project/#/workspace",
+      evaluate: async () => this.result,
+    } as unknown as Page;
+    source.activeProfileName = profileName;
+  }
+
+  async probe(profile: OnesConfig["profiles"][string]): Promise<unknown> {
+    return this.requestJson(profile, "GET", "items/graphql");
   }
 }
 
@@ -329,20 +365,36 @@ try {
   const delayedConnect = await delayedConnectSource.openBrowserSession(ticketProfile(autoLoginConfig));
   assert.equal(delayedConnect.authentication.authorized, true);
   assert.deepEqual(delayedConnectSource.authorizationWaits, [500, 1_000, 2_000]);
-  const unconfirmedConnect = await new ConnectTestBrowserSource(autoLoginConfig, [{ authorized: false, diagnostics: ["sign in"] }]).openBrowserSession(ticketProfile(autoLoginConfig));
+  const delayedBeyondLegacyWindowSource = new ConnectTestBrowserSource(autoLoginConfig, [
+    { authorized: false, diagnostics: ["session is settling"] },
+    { authorized: false, diagnostics: ["session is settling"] },
+    { authorized: false, diagnostics: ["session is settling"] },
+    { authorized: false, diagnostics: ["session is settling"] },
+    { authorized: true, diagnostics: ["accepted"] },
+  ]);
+  const delayedBeyondLegacyWindow = await delayedBeyondLegacyWindowSource.openBrowserSession(ticketProfile(autoLoginConfig));
+  assert.equal(delayedBeyondLegacyWindow.authentication.authorized, true, "automatic authorization must remain in the bounded confirmation window after the legacy four probes");
+  assert.deepEqual(delayedBeyondLegacyWindowSource.authorizationWaits, [500, 1_000, 2_000, 4_000, 8_000]);
+  const unconfirmedConnectSource = new ConnectTestBrowserSource(autoLoginConfig, [{ authorized: false, diagnostics: ["sign in"] }]);
+  const unconfirmedConnect = await unconfirmedConnectSource.openBrowserSession(ticketProfile(autoLoginConfig));
   assert.equal(unconfirmedConnect.authentication.authorized, false);
-  assert.match(unconfirmedConnect.message, /not yet confirmed/);
+  assert.equal(unconfirmedConnect.authentication.state, "pending");
+  assert.match(unconfirmedConnect.message, /still pending/);
+  assert.doesNotMatch(unconfirmedConnect.message, /MFA|CAPTCHA|SSO/);
+  assert.deepEqual(unconfirmedConnectSource.authorizationWaits, [500, 1_000, 2_000, 4_000, 8_000, 14_000]);
   await assert.rejects(
     () => new TestableBrowserSource(autoLoginConfig).triggerAutoLogin(autoLoginConfig.profiles.demo!, mockLoginPage([], true)),
-    (error: unknown) => error instanceof Error
-      && error.name === "TicketError"
+    (error: unknown) => error instanceof TicketError
+      && error.code === "HUMAN_ACTION_REQUIRED"
+      && error.details?.authorizationState === "manual-action-required"
       && !error.message.includes("operator@example.test")
       && !error.message.includes("test-only-password"),
   );
   await assert.rejects(
     () => new TestableBrowserSource(autoLoginConfig).triggerAutoLogin(autoLoginConfig.profiles.demo!, mockLoginPage([], false, "https://outside.example.test/login")),
-    (error: unknown) => error instanceof Error
-      && error.name === "TicketError"
+    (error: unknown) => error instanceof TicketError
+      && error.code === "HUMAN_ACTION_REQUIRED"
+      && error.details?.authorizationState === "manual-action-required"
       && !error.message.includes("operator@example.test")
       && !error.message.includes("test-only-password"),
   );
@@ -399,6 +451,45 @@ try {
     () => parseJsonResponse({ status: 200, headers: new Headers({ "content-type": "text/html" }), text: "captcha required" }),
     { name: "TicketError", message: /human authentication/ },
   );
+  assert.throws(
+    () => parseJsonResponse({ status: 200, headers: new Headers({ "content-type": "text/html" }), text: "SSO sign-in required" }),
+    { name: "TicketError", message: /human authentication/ },
+  );
+  assert.throws(
+    () => parseJsonResponse({ status: 401, headers: new Headers({ "content-type": "text/html" }), text: "MFA challenge required" }),
+    (error: unknown) => error instanceof TicketError && error.code === "HUMAN_ACTION_REQUIRED",
+    "a 401 challenge page is evidence of a manual action, not merely an unsettled session",
+  );
+  assert.throws(
+    () => parseJsonResponse({ status: 401, headers: new Headers({ "content-type": "application/json" }), text: JSON.stringify({ message: "MFA rollout" }) }),
+    (error: unknown) => error instanceof TicketError && error.code === "SOURCE_UNAUTHORIZED",
+    "JSON content mentioning MFA must not be treated as a challenge",
+  );
+  assert.deepEqual(
+    parseJsonResponse({ status: 200, headers: new Headers({ "content-type": "application/json" }), text: JSON.stringify({ title: "MFA rollout" }) }),
+    { title: "MFA rollout" },
+    "ordinary JSON ticket content must not be classified as an authentication challenge",
+  );
+  const pendingStatusSource = new StatusTestBrowserSource(autoLoginConfig, new TicketError("SOURCE_UNAUTHORIZED", "session is settling"));
+  pendingStatusSource.bindPage("demo", "https://tenant.example.test/project/#/workspace");
+  const pendingStatus = await pendingStatusSource.status(ticketProfile(autoLoginConfig));
+  assert.equal(pendingStatus.authorizationState, "pending");
+  const challengeStatusSource = new StatusTestBrowserSource(autoLoginConfig, new TicketError("HUMAN_ACTION_REQUIRED", "challenge page"));
+  challengeStatusSource.bindPage("demo", "https://tenant.example.test/project/#/workspace");
+  const challengeStatus = await challengeStatusSource.status(ticketProfile(autoLoginConfig));
+  assert.equal(challengeStatus.authorizationState, "manual-action-required");
+  assert.doesNotMatch(challengeStatus.diagnostics.join(" "), /SSO/);
+  const responseChallengeSource = new RequestTestBrowserSource(autoLoginConfig, { status: 401, contentType: "text/html", text: "<html>SSO challenge</html>" });
+  responseChallengeSource.bindPage("demo");
+  await assert.rejects(
+    () => responseChallengeSource.probe(autoLoginConfig.profiles.demo!),
+    (error: unknown) => error instanceof TicketError && error.code === "HUMAN_ACTION_REQUIRED",
+    "the browser request path must preserve observed challenge evidence from a 401 response",
+  );
+  const externalFlowSource = new StatusTestBrowserSource(autoLoginConfig, new TicketError("SOURCE_UNAUTHORIZED", "not used"));
+  externalFlowSource.bindPage("demo", "https://identity.example.test/login");
+  const externalFlowStatus = await externalFlowSource.status(ticketProfile(autoLoginConfig));
+  assert.equal(externalFlowStatus.authorizationState, "manual-action-required");
   const privateApplication = createApplication(
     { ...config, storage: { ...config.storage, redaction: { omitPeople: true, removeFields: ["email"] } } },
     new FakeProvider(),
@@ -486,7 +577,7 @@ try {
   let closeCalls = 0;
   const automaticSession: BrowserSessionProvider = {
     async openBrowserSession() {
-      return { url: "https://tenant.example.test", message: "automatic", authentication: { mode: "auto", authorized: true, diagnostics: [] }, created: true };
+      return { url: "https://tenant.example.test", message: "automatic", authentication: { mode: "auto", authorized: true, state: "authorized", diagnostics: [] }, created: true };
     },
     async closeBrowserSession() { closeCalls += 1; },
   };
@@ -519,7 +610,7 @@ try {
     redaction: config.storage.redaction,
     browserSessions: {
       async openBrowserSession() {
-        return { url: "https://tenant.example.test", message: "existing", authentication: { mode: "manual", authorized: true, diagnostics: [] }, created: false };
+        return { url: "https://tenant.example.test", message: "existing", authentication: { mode: "manual", authorized: true, state: "authorized", diagnostics: [] }, created: false };
       },
       async closeBrowserSession() { closeCalls += 1; },
     },
@@ -536,7 +627,7 @@ try {
     redaction: config.storage.redaction,
     browserSessions: {
       async openBrowserSession() {
-        return { url: "https://tenant.example.test", message: "challenge", authentication: { mode: "manual", authorized: false, diagnostics: ["MFA"] }, created: true };
+        return { url: "https://tenant.example.test", message: "challenge", authentication: { mode: "manual", authorized: false, state: "manual-action-required", diagnostics: ["interactive challenge detected"] }, created: true };
       },
       async closeBrowserSession() { closeCalls += 1; },
     },
@@ -545,9 +636,40 @@ try {
   closeCalls = 0;
   await assert.rejects(
     () => challengeApplication.withBrowserAuthRecovery("demo", () => challengeApplication.getTicket("demo", { id: "task-1" })),
-    (error: unknown) => error instanceof TicketError && error.code === "HUMAN_ACTION_REQUIRED",
+    (error: unknown) => error instanceof TicketError
+      && error.code === "HUMAN_ACTION_REQUIRED"
+      && error.details?.authorizationState === "manual-action-required",
   );
-  assert.equal(closeCalls, 0, "an unresolved MFA or SSO challenge must remain visible for the user");
+  assert.equal(closeCalls, 0, "an unresolved interactive challenge must remain visible for the user");
+
+  const pendingApplication = new TicketApplication({
+    profiles: new StaticTicketProfileResolver([ticketProfile(config)]),
+    provider: recoverableProvider,
+    bundleStore: queryBundleStore,
+    redaction: config.storage.redaction,
+    browserSessions: {
+      async openBrowserSession() {
+        return {
+          url: "https://tenant.example.test",
+          message: "pending",
+          authentication: { mode: "auto", authorized: false, state: "pending", diagnostics: ["automatic direct login was submitted; ONES authorization is still pending"] },
+          created: true,
+        };
+      },
+      async closeBrowserSession() { closeCalls += 1; },
+    },
+  });
+  recoveryAttempts = 0;
+  closeCalls = 0;
+  await assert.rejects(
+    () => pendingApplication.withBrowserAuthRecovery("demo", () => pendingApplication.getTicket("demo", { id: "task-1" })),
+    (error: unknown) => error instanceof TicketError
+      && error.code === "AUTHORIZATION_PENDING"
+      && error.details?.authorizationState === "pending"
+      && error.details.diagnostics?.[0]?.includes("pending") === true
+      && !/MFA|CAPTCHA|SSO/.test(error.message),
+  );
+  assert.equal(closeCalls, 0, "a pending automatic authorization must leave the visible session open for a retry");
 
   const poolEvents: string[] = [];
   const poolCompletions = new Map<string, () => void>();

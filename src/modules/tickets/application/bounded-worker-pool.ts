@@ -18,15 +18,24 @@ export async function runBoundedWorkerPool<TInput, TResult>(
   if (!Number.isSafeInteger(maxWorkers) || maxWorkers < 1) throw new RangeError("maxWorkers must be a positive safe integer");
   let nextInput = 0;
   let nextCompletion = 0;
+  let stopError: unknown;
   const results: WorkerPoolResult<TResult>[] = [];
   const worker = async () => {
     for (;;) {
-      if (signal?.aborted || nextInput >= inputs.length) return;
+      if (signal?.aborted || stopError !== undefined || nextInput >= inputs.length) return;
       const inputIndex = nextInput++;
-      const value = await execute(inputs[inputIndex]!, inputIndex);
-      results.push({ inputIndex, completionIndex: nextCompletion++, value });
+      try {
+        const value = await execute(inputs[inputIndex]!, inputIndex);
+        results.push({ inputIndex, completionIndex: nextCompletion++, value });
+      } catch (error) {
+        // Stop replacement work and wait for all in-flight workers before the
+        // caller can retry an operation (notably after authorization recovery).
+        stopError ??= error;
+        return;
+      }
     }
   };
   await Promise.all(Array.from({ length: Math.min(maxWorkers, inputs.length) }, worker));
+  if (stopError !== undefined) throw stopError;
   return results;
 }

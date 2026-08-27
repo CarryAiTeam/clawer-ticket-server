@@ -15,7 +15,7 @@ description: 当用户获取、查询、查看列表、读取详情、分页、�
 | --- | --- | --- |
 | 查看、查阅、查询、列出工单 | `ticket_search` | 只读列表；默认 `scope: "self"`、`state: "open"` |
 | 查看/读取某工单详情 | `ticket_get` | 只读详情、评论与附件元数据，不落盘 |
-| 获取、下载到本地、导出、保存 | `ticket_export` | 查询导出在一次调用中完整下载详情、图片和附件：`mode: "write", media: "download"`；用户说的展示状态（如“新建”）写入 `query.statuses`；仅明确预览才用 `mode: "plan"`，仅明确不要媒体才用 `media: "metadata"` |
+| 获取、下载到本地、导出、保存 | `ticket_export` | 先用 `mode: "write", media: "download"`；服务内部完整分页。1–50 条直接下载；51–2,000 条返回确认选择后，取得用户明确确认再以原 query、media、selection 调用一次；仅明确预览才用 `mode: "plan"`，仅明确不要媒体才用 `media: "metadata"` |
 
 ## 固定执行顺序
 
@@ -24,14 +24,16 @@ description: 当用户获取、查询、查看列表、读取详情、分页、�
 Compatibility lifecycle notation: `normalize profile/ref → execute intended call → auth recovery once → retry once → disconnect in finally → render result`. The service now owns the automatic retry and cleanup, so callers must not repeat those tool calls.
 
 1. 先直接调用目标工具；不要为普通读取、导出计划或本地下载预先调用连接或状态检查，也不要求回复“连接 ONES”。
-   明确“获取、下载到本地、导出、保存到本地”本身也是一次写入授权。
-2. browser profile 首次遇到 `SOURCE_UNAUTHORIZED` 或 `HUMAN_ACTION_REQUIRED` 时，服务端会自动打开浏览器、执行已配置的 `browser.autoLogin`，确认 `authentication.authorized: true` 后以原参数重试一次；无需二次确认。
+   明确“获取、下载到本地、导出、保存到本地”本身也是一次写入授权；仅当服务返回大范围确认时，才展示冻结数量并等待用户确认。
+2. browser profile 首次遇到 `SOURCE_UNAUTHORIZED` 或 `HUMAN_ACTION_REQUIRED` 时，服务端会自动打开浏览器、执行已配置的 `browser.autoLogin`，确认 `authentication.authorized: true` 且 `authentication.state: "authorized"` 后以原参数重试一次；无需二次确认。
 3. 仅自动新建且已授权的临时会话会在成功、失败或取消时由服务端清理；显式 `ticket_browser_connect` 创建的会话不自动关闭。
-4. 若出现 MFA、CAPTCHA、SSO 或其他人工挑战，服务端保留可见浏览器；请用户完成挑战后重试目标工具。不要重复打开浏览器，也不要自动关闭挑战页。
-5. 用户明确要求连接、保持页面，或需要完成挑战时才调用 `ticket_browser_connect`；这类显式会话由调用方在完成后调用 `ticket_browser_disconnect`，不要求用户确认关闭。
-6. `scope: "project"` 需要非空 `allowedProjects`；空白名单返回 `SOURCE_NOT_ALLOWED`，不得扩大范围。
-7. 查询型 `write` 最多使用 3 个工位：每个工位只处理一张，完成详情读取、附件下载与原子落盘后立即领取下一张。不要并发调用多个 `ticket_export`。
-8. 30 秒只是“仍在处理”的观察阈值，不是强制终止时间。取消时不领取下一张，已在处理的工单收尾后返回。
+4. `AUTHORIZATION_PENDING` 表示自动登录已提交、但没有检测到人工挑战；保持页面并短暂等待后只重试原目标工具一次。不要要求用户登录、完成 MFA、CAPTCHA 或 SSO，也不要调用 `ticket_browser_connect`。
+5. 当 `HUMAN_ACTION_REQUIRED` 的 `details.authorizationState` 为 `manual-action-required` 时，服务端保留可见浏览器；请用户完成页面上的实际操作后重试目标工具。其他此类错误只按返回消息说明，仍不要猜测挑战类型、重复打开浏览器或自动关闭挑战页。
+6. 用户明确要求连接、保持页面，或需要完成挑战时才调用 `ticket_browser_connect`；这类显式会话由调用方在完成后调用 `ticket_browser_disconnect`，不要求用户确认关闭。
+7. `scope: "project"` 需要非空 `allowedProjects`；空白名单返回 `SOURCE_NOT_ALLOWED`，不得扩大范围。
+8. 查询型 `write` 最多使用 3 个工位：每个工位只处理一张，完成详情读取、附件下载与原子落盘后立即领取下一张。不要并发调用多个 `ticket_export`。
+9. 30 秒只是“仍在处理”的观察阈值，不是强制终止时间。取消时不领取下一张，已在处理的工单收尾后返回。
+10. `EXPORT_CONFIRMATION_REQUIRED` 不是成功下载：不要自行拆页、降低媒体模式或并发重复调用。向用户展示数量；确认后仅回传完全相同的 query、media 和 selection。`EXPORT_LIMIT_EXCEEDED` 表示超过 2,000 硬上限，应缩小范围。
 
 ## 按需读取的参考契约
 

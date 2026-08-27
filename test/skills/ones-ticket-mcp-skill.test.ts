@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-type Call = { tool: string; purpose?: string; outcome?: string; retryOf?: number; autoLogin?: boolean; mode?: "plan" | "write"; media?: "metadata" | "download"; selection?: "prior-plan"; statuses?: string[]; match?: { field: string; value: string; mode: string } };
+type Call = { tool: string; purpose?: string; outcome?: string; retryOf?: number; autoLogin?: boolean; mode?: "plan" | "write"; media?: "metadata" | "download"; selection?: "prior-plan" | "prior-confirmation"; statuses?: string[]; match?: { field: string; value: string; mode: string } };
 type Scenario = {
   id: string;
   route: "list" | "detail" | "export" | "blocked";
   calls: Call[];
-  policy: { auth: "ready" | "automatic" | "challenge" | "not-needed"; retryOnce?: boolean; cleanup: "disconnect" | "leave-open" | "if-session"; exportFlow?: "plan-only" | "direct-write" | "planned-write"; media?: "metadata" | "download"; requiresCompleteMedia?: boolean; queryBlocked?: boolean; exactMatch?: boolean };
+  policy: { auth: "ready" | "automatic" | "pending" | "challenge" | "not-needed"; retryOnce?: boolean; cleanup: "disconnect" | "leave-open" | "if-session"; exportFlow?: "plan-only" | "direct-write" | "planned-write" | "confirmation-write"; media?: "metadata" | "download"; requiresCompleteMedia?: boolean; queryBlocked?: boolean; exactMatch?: boolean };
 };
 
 const skillRoot = new URL("../../skills/ones-ticket-mcp/", import.meta.url);
@@ -43,6 +43,7 @@ for (const rule of [
   "normalize profile/ref → execute intended call → auth recovery once → retry once → disconnect in finally → render result",
   "不要求回复“连接 ONES”",
   "authentication.authorized: true",
+  "AUTHORIZATION_PENDING",
   "无需二次确认",
   "明确“获取、下载到本地、导出、保存到本地”本身也是一次写入授权",
   "不要求用户确认关闭",
@@ -77,8 +78,8 @@ assert.match(metadata, /short_description:\s*"[^"]{25,64}"/);
 assert.match(metadata, /default_prompt:\s*"[^"]*\$ones-ticket-mcp[^"]*"/);
 
 // P1: machine-readable scenarios prove ordering and the necessary exceptions.
-assert.equal(fixture.version, 3);
-assert.equal(fixture.scenarios.length, 12, "fixture must cover all P0/P1 paths");
+assert.equal(fixture.version, 5);
+assert.equal(fixture.scenarios.length, 14, "fixture must cover all P0/P1 paths");
 assert.equal(new Set(fixture.scenarios.map(({ id }) => id)).size, fixture.scenarios.length, "scenario IDs must be unique");
 for (const current of fixture.scenarios) {
   assert.ok(current.calls.length > 0, `${current.id} must describe calls`);
@@ -136,6 +137,13 @@ for (const current of fixture.scenarios) {
   assert.equal(current.calls[indexOf(current.calls, "ticket_browser_connect")]!.outcome, "HUMAN_ACTION_REQUIRED");
 }
 {
+  const current = find("automatic-authorization-pending");
+  assert.equal(current.policy.auth, "pending");
+  assert.equal(current.calls[0]!.outcome, "AUTHORIZATION_PENDING");
+  assert.equal(current.calls.filter(({ tool }) => tool === "ticket_search").length, 2, "pending authorization must retry the original tool rather than open another browser");
+  assert.ok(!current.calls.some(({ tool }) => tool === "ticket_browser_connect"));
+}
+{
   const current = find("numeric-not-found");
   assert.ok(current.calls.filter(({ tool }) => tool === "ticket_search").length >= 2, "not-found lookup must page through results");
   assert.equal(current.policy.exactMatch, false);
@@ -158,6 +166,15 @@ for (const current of fixture.scenarios) {
   assert.equal(current.calls[write]!.selection, undefined);
   assert.equal(current.policy.exportFlow, "direct-write");
   assert.ok(!current.calls.some(({ purpose }) => purpose === "plan"), "a direct export must not wait for a preview or repeated confirmation");
+}
+{
+  const current = find("large-export-confirmation");
+  const preflight = indexOf(current.calls, "ticket_export");
+  const confirmed = indexOf(current.calls, "ticket_export", preflight + 1);
+  assert.equal(current.calls[preflight]!.outcome, "EXPORT_CONFIRMATION_REQUIRED");
+  assert.equal(current.calls[confirmed]!.selection, "prior-confirmation");
+  assert.equal(current.policy.exportFlow, "confirmation-write");
+  assert.equal(current.policy.requiresCompleteMedia, true);
 }
 {
   const current = find("planned-export-write");

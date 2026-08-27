@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { StaticTicketProfileResolver } from "../../src/config/static-ticket-profile-resolver.js";
 import { TicketApplication } from "../../src/modules/tickets/application/ticket-application.js";
+import { TicketError } from "../../src/modules/tickets/domain/ticket-error.js";
 import { BrowserSessionProvider, TicketBundleStore, TicketProvider } from "../../src/modules/tickets/domain/ports.js";
 import { CanonicalTicket, TicketSearchQuery } from "../../src/modules/tickets/domain/ticket.js";
 import { createServer } from "../../src/bootstrap/create-server.js";
@@ -104,7 +105,7 @@ try {
   const mediaExportPayload = responseJson(mediaExport);
   const singleExportBudget = (mediaExportPayload.export as { budget: { mediaMode: string; limits: { maxItems: number } } }).budget;
   assert.equal(singleExportBudget.mediaMode, "download");
-  assert.equal(singleExportBudget.limits.maxItems, 50);
+  assert.equal(singleExportBudget.limits.maxItems, 2_000);
   const plansBeforeExplicitPreview = plannedExportCount;
   const commitsBeforeExplicitPreview = committedExportCount;
   const explicitPreview = await client.callTool({ name: "ticket_export", arguments: { profile: "test", ticket: { id: "task-test" }, mode: "plan" } });
@@ -279,7 +280,7 @@ try {
     provider,
     bundleStore,
     redaction: { omitPeople: false, removeFields: [] },
-    exportLimits: { maxItems: 1 },
+    exportLimits: { autoDownloadThreshold: 1, maxItems: 1 },
   });
   await assert.rejects(
     () => limitedApplication.exportTicketSearch("test", { scope: "self", state: "open" }, "plan", "metadata"),
@@ -324,6 +325,46 @@ try {
   } finally {
     await multiClientTransport.close();
     await multiServerTransport.close();
+  }
+
+  const pendingProfiles = new StaticTicketProfileResolver([{ name: "browser", providerId: "ones", connector: "browser", allowedProjects: ["project-test"], inlineMaxChars: 12_000 }]);
+  const pendingProvider: TicketProvider = {
+    providerId: "ones",
+    async status() { return { configured: true, authorized: false, diagnostics: [] }; },
+    async search() { throw new TicketError("SOURCE_UNAUTHORIZED", "browser authentication is required"); },
+    async getTicket() { return ticket; },
+  };
+  const pendingBrowserSession: BrowserSessionProvider = {
+    async openBrowserSession() {
+      return {
+        url: "https://tenant.example.test",
+        message: "pending",
+        authentication: { mode: "auto", authorized: false, state: "pending", diagnostics: ["automatic direct login was submitted; ONES authorization is still pending"] },
+        created: true,
+      };
+    },
+    async closeBrowserSession() {},
+  };
+  const pendingServer = createServer({ application: new TicketApplication({ profiles: pendingProfiles, provider: pendingProvider, browserSessions: pendingBrowserSession, bundleStore, redaction: { omitPeople: false, removeFields: [] } }) });
+  const [pendingClientTransport, pendingServerTransport] = InMemoryTransport.createLinkedPair();
+  const pendingClient = new Client({ name: "pending-authorization-test", version: "1.0.0" });
+  try {
+    await pendingServer.connect(pendingServerTransport);
+    await pendingClient.connect(pendingClientTransport);
+    const pendingResult = await pendingClient.callTool({ name: "ticket_search", arguments: { profile: "browser" } });
+    assert.equal(pendingResult.isError, true, "unconfirmed automatic authorization must be a stable MCP error");
+    const pendingPayload = responseJson(pendingResult);
+    const pendingError = pendingPayload.error as { code?: string; message?: string; details?: unknown };
+    assert.equal(pendingError.code, "AUTHORIZATION_PENDING");
+    assert.match(pendingError.message ?? "", /still pending/);
+    assert.doesNotMatch(pendingError.message ?? "", /MFA|CAPTCHA|SSO/);
+    assert.deepEqual(pendingError.details, {
+      authorizationState: "pending",
+      diagnostics: ["automatic direct login was submitted; ONES authorization is still pending"],
+    });
+  } finally {
+    await pendingClientTransport.close();
+    await pendingServerTransport.close();
   }
 
   console.log("MCP smoke test passed.");

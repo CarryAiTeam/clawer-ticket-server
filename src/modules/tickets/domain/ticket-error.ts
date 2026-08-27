@@ -4,6 +4,7 @@ export type TicketErrorCode =
   | "CONFIG_INVALID"
   | "SECRET_UNAVAILABLE"
   | "SOURCE_UNAUTHORIZED"
+  | "AUTHORIZATION_PENDING"
   | "SOURCE_RATE_LIMITED"
   | "HUMAN_ACTION_REQUIRED"
   | "SOURCE_SCHEMA_CHANGED"
@@ -14,15 +15,29 @@ export type TicketErrorCode =
   | "UNSUPPORTED_FILTER"
   | "QUERY_CURSOR_INVALID"
   | "SELECTION_CHANGED"
+  | "EXPORT_CONFIRMATION_REQUIRED"
   | "EXPORT_LIMIT_EXCEEDED"
   | "EXPORT_ROOT_DENIED"
   | "PROVIDER_NOT_AVAILABLE"
   | "REQUEST_CANCELLED";
 
+/** 仅允许把受控授权状态投影给 MCP；不得携带页面地址、Cookie 或原始来源响应。 */
+export interface TicketErrorDetails {
+  authorizationState?: "pending" | "manual-action-required";
+  diagnostics?: string[];
+  confirmation?: {
+    selectedCount: number;
+    autoDownloadThreshold: number;
+    maxItems: number;
+    selection: { expectedCount: number; fingerprint: string };
+    query: { scope: string; state: string; fingerprint: string; mediaMode: "metadata" | "download" };
+  };
+}
+
 /** 工单用例与 MCP 结果映射对外暴露的 provider 无关错误。 */
 export class TicketError extends Error {
   /** 创建带稳定错误码且与 provider 无关的领域错误。 */
-  constructor(public readonly code: TicketErrorCode, message: string) {
+  constructor(public readonly code: TicketErrorCode, message: string, public readonly details?: TicketErrorDetails) {
     super(message);
     this.name = "TicketError";
   }

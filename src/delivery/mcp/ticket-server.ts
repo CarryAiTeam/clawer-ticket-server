@@ -14,7 +14,9 @@ function textResult(value: unknown, isError = false) {
 
 /** 将领域错误转换为稳定的 MCP 错误载荷，避免泄露未处理异常结构。 */
 function errorResult(error: unknown) {
-  if (error instanceof TicketError) return textResult({ ok: false, error: { code: error.code, message: error.message } }, true);
+  if (error instanceof TicketError) {
+    return textResult({ ok: false, error: { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) } }, true);
+  }
   return textResult({ ok: false, error: { code: "UNEXPECTED", message: error instanceof Error ? error.message : "Unexpected error" } }, true);
 }
 
@@ -48,7 +50,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_browser_connect",
     {
       title: "Open supervised ONES browser session",
-      description: "Opens a fresh visible Chrome window for this browser profile. When autoLogin is configured, it submits the local direct-login credentials and immediately performs a read-only ONES authorization probe; the result explicitly reports whether the session is ready. MFA, CAPTCHA, SSO approval, and other challenges always require user action. The session stays only in this MCP process and is never exported or persisted.",
+      description: "Opens a fresh visible Chrome window for this browser profile. When autoLogin is configured, it submits the local direct-login credentials and performs a bounded read-only ONES authorization probe; the result reports whether the session is ready, still pending, or needs an interactive action. Only an observed MFA, CAPTCHA, SSO approval, or other challenge requires user action. The session stays only in this MCP process and is never exported or persisted.",
       inputSchema: { profile: profileSchema },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -154,7 +156,7 @@ export function createTicketMcpServer({ getApplication }: TicketMcpServerDepende
     "ticket_export",
     {
       title: "Export a ticket work item",
-      description: "Local export for 获取、下载到本地、导出或保存到本地. It fetches complete normalized details including comments and attachment-backed images. Query.statuses accepts exact ONES display status names such as 新建; query writes export the complete matching selection in one call. Defaults to mode=write with media=download for a direct local export; use mode=plan only when the caller explicitly requests a preview. Query writes with a selection returned by a prior plan validate that frozen selection. Item/media budgets are enforced and results include completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
+      description: "Local export for 获取、下载到本地、导出或保存到本地. It fetches complete normalized details including comments and attachment-backed images. Query.statuses accepts exact ONES display status names such as 新建. A query selection of up to 50 writes completely in one call; 51–2,000 first returns EXPORT_CONFIRMATION_REQUIRED with a frozen selection and performs no writes, then the same query, media, and selection must be sent after user confirmation. Query writes always enumerate internally in fixed 50-item cursor pages; page is not a public export parameter. Defaults to mode=write with media=download; mode=plan remains a complete no-write plan. Item/media budgets are enforced and results include completed and failed ticket IDs. Temporary ONES URLs are never returned or persisted.",
       inputSchema: ticketExportInputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },

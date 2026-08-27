@@ -19,7 +19,7 @@
 
 Skill 源文件位于 `skills/ones-ticket-mcp/`。它是随 npm 包发布的版本化资产，但不位于 Codex 的项目级自动发现目录；检出仓库或安装 npm 包本身都不会自动启用它。需要使用时，用户应显式将该目录复制或建立链接到目标项目的 `.agents/skills/ones-ticket-mcp/`，或自己的用户级 Skill 目录。
 
-对于 browser profile，用户的读取请求、导出 `plan` 请求或明确本地下载请求即视为自动连接授权：如果首次调用发现会话未就绪，服务会直接打开临时浏览器、执行已配置的 `browser.autoLogin` 并重试原始调用，不要求额外回复“连接 ONES”。只有由本次恢复实际创建且已授权的临时会话，才会在成功、失败或取消后自动关闭；显式 `ticket_browser_connect` 创建的会话会保留给 MFA/SSO 等人工操作，并由调用方显式断开。只有 ONES 实际显示 MFA、验证码、SSO 或其他人工挑战时，才需要在可见窗口操作。明确的本地下载指令本身就是写入授权，不再要求二次确认。
+对于 browser profile，用户的读取请求、导出 `plan` 请求或明确本地下载请求即视为自动连接授权：如果首次调用发现会话未就绪，服务会直接打开临时浏览器、执行已配置的 `browser.autoLogin` 并重试原始调用，不要求额外回复“连接 ONES”。自动登录已提交但会话仍在结算时，服务会返回可重试的 `AUTHORIZATION_PENDING`，不会把它称为 MFA、验证码或 SSO。只有由本次恢复实际创建且已授权的临时会话，才会在成功、失败或取消后自动关闭；显式 `ticket_browser_connect` 创建的会话会保留给实际需要人工操作的页面，并由调用方显式断开。只有 ONES 实际显示 MFA、验证码、SSO 或其他人工挑战时，才需要在可见窗口操作。明确的本地下载指令是写入授权；但查询结果超过 50 条时，服务会先冻结范围并要求确认，避免意外写入大批量内容。
 
 该 Skill 为调用方提供参数构造与流程引导，不替代服务端的 schema、项目白名单、cursor 或 selection 校验。当前不提供自动安装器；后续若需要将多个 Skill 和 MCP 连接作为一个产品分发，再以 Plugin 取代这一显式安装步骤。
 
@@ -64,11 +64,11 @@ Skill 源文件位于 `skills/ones-ticket-mcp/`。它是随 npm 包发布的版�
 
 单张导出传 `ticket`；查询导出传与 `ticket_search` 相同的 `query`（query 不含 `page`）。
 
-“获取工单”调用 `ticket_export({ query, mode: "write", media: "download" })`，得到包含附件和图片的完整本地副本；具体状态名称可传 `query.statuses`。服务在同一调用中冻结选择，并逐张原子写入，不会把全部详情保留在内存中。只说“查看、查阅、查询、列出”时使用只读工具。
+“获取工单”调用 `ticket_export({ query, mode: "write", media: "download" })`；具体状态名称可传 `query.statuses`。服务以固定每页 50 条的内部 cursor 分页完整冻结选择，不向调用方暴露 page。选择为 1–50 条时会在该调用中完整写入；选择为 51–2,000 条时返回零写入的 `EXPORT_CONFIRMATION_REQUIRED`，其中包含 `selection`。向用户展示数量并取得明确确认后，使用完全相同的 query、media 和 selection 再次调用 `ticket_export`，服务会重新枚举、校验未漂移并完整导出全部选择。只说“查看、查阅、查询、列出”时使用只读工具。
 
 只有用户明确要求预览时，才调用 \`ticket_export({ query, mode: "plan" })\`。计划会返回 \`selection\`，后续“按刚才计划导出”需将完全相同的查询、\`selection\` 与 media 回传给 \`mode: "write"\`；数量或有序 ID 集合变化时返回 \`SELECTION_CHANGED\`，不会静默扩大写入范围。\`media: "metadata"\` 是用户明确要求“不要附件/图片、仅元数据”时的降级选项，不能用于普通“获取”。
 
-服务端默认限制查询导出最多 50 张工单、500 个媒体文件、单文件 50 MiB、总媒体 512 MiB。可在 `storage.exportLimits` 中调整；超限返回 `EXPORT_LIMIT_EXCEEDED`。查询 `write` 最多并行 3 个工位：每个工位完成一张工单的详情读取、附件下载与原子 bundle 提交后，立即领取下一张，因此不会混写也不必等待整批。`exports` 和 `failedTickets` 仍按查询顺序返回，`completedTickets` 则报告真实完成顺序。并发上限由 profile 的 `requestBudget.maxConcurrent` 控制（1–3，默认 3），并仍受每分钟请求预算约束。取消后不再补领下一张；30 秒只是进度观察阈值，并非强制杀掉正在处理的下载。重新 plan 后可利用已有 bundle 的幂等复用继续执行。
+服务端默认 `storage.exportLimits.autoDownloadThreshold` 为 50，`maxItems` 为 2,000（同步导出的硬上限，配置超过 2,000 会明确报错，不会截断）。超过硬上限返回 `EXPORT_LIMIT_EXCEEDED`，不会静默只写入第一页。`mode: "plan"` 仍是完整、可能耗时但无写入的计划。查询 `write` 最多并行 3 个工位：每个工位完成一张工单的详情读取、附件下载与原子 bundle 提交后，立即领取下一张，因此不会混写也不必等待整批。授权错误会先停止补位并等待已在途工位收束，再创建临时会话重试整次操作。`exports` 和 `failedTickets` 仍按查询顺序返回，`completedTickets` 则报告真实完成顺序。取消后不再补领下一张；30 秒只是进度观察阈值，并非强制杀掉正在处理的下载。确认仅授权工单范围，媒体预算和局部失败语义保持不变。
 
 ## 配置与安全
 

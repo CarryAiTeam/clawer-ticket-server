@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 5,
   "scenarios": [
     {
       "id": "retrieve-new-ticket-download-media",
@@ -77,6 +77,16 @@
       "policy": { "auth": "challenge", "cleanup": "leave-open" }
     },
     {
+      "id": "automatic-authorization-pending",
+      "route": "detail",
+      "request": "读取自动登录尚在生效的工单",
+      "calls": [
+        { "tool": "ticket_search", "outcome": "AUTHORIZATION_PENDING", "purpose": "automatic-authorization-pending" },
+        { "tool": "ticket_search", "retryOf": 0, "purpose": "retry-original-read" }
+      ],
+      "policy": { "auth": "pending", "retryOnce": true, "cleanup": "if-session" }
+    },
+    {
       "id": "numeric-not-found",
       "route": "detail",
       "request": "查看不存在的数字工单号",
@@ -106,6 +116,17 @@
         { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
       ],
       "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "direct-write" }
+    },
+    {
+      "id": "large-export-confirmation",
+      "route": "export",
+      "request": "获取我的全部未完成工单（服务返回大范围确认）",
+      "calls": [
+        { "tool": "ticket_export", "purpose": "preflight-confirmation", "mode": "write", "media": "download", "outcome": "EXPORT_CONFIRMATION_REQUIRED" },
+        { "tool": "ticket_export", "purpose": "confirmed-write", "mode": "write", "media": "download", "selection": "prior-confirmation" },
+        { "tool": "ticket_browser_disconnect", "purpose": "finally-cleanup" }
+      ],
+      "policy": { "auth": "ready", "cleanup": "disconnect", "exportFlow": "confirmation-write", "media": "download", "requiresCompleteMedia": true }
     },
     {
       "id": "planned-export-write",

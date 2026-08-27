@@ -45,9 +45,9 @@ const DIRECT_LOGIN_SUBMIT_SELECTOR = [
 
 /**
  * 目标系统可能在提交登录表单后异步建立会话；这里使用有界且稀疏的探测等待，
- * 避免超出 profile 的请求预算。
+ * 覆盖约 30 秒的结算窗口，同时避免超出 profile 的请求预算。
  */
-const AUTO_LOGIN_AUTHORIZATION_DELAYS_MS = [500, 1_000, 2_000, 4_000] as const;
+const AUTO_LOGIN_AUTHORIZATION_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000, 14_000] as const;
 
 /**
  * ONES 浏览器 provider 使用可见窗口和全新的内存 context，不使用持久化个人资料目录。
@@ -75,17 +75,21 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
     const autoLoginConfigured = Boolean(profile.browser?.autoLogin);
     const authorization = autoLoginConfigured
       ? await this.waitForAutoLoginAuthorization(ticketProfile, page)
-      : { authorized: false, diagnostics: ["sign in to ONES in the visible browser session, then check connection status"] };
+      : { authorized: false, authorizationState: "manual-action-required" as const, diagnostics: ["sign in to ONES in the visible browser session, then check connection status"] };
+    const authorizationState = authorization.authorized
+      ? "authorized"
+      : authorization.authorizationState ?? (autoLoginConfigured ? "pending" : "manual-action-required");
     return {
       url: page.url(),
-      message: autoLoginConfigured
-        ? authorization.authorized
-          ? "A visible temporary browser was opened and automatic direct login was confirmed by ONES. The session is ready for ticket tools and remains only while this MCP process is running."
-          : "A visible temporary browser was opened and direct-login credentials were submitted, but ONES authorization is not yet confirmed. Complete any MFA, CAPTCHA, SSO, or other challenge in the window, then check connection status before reading tickets. The session remains only while this MCP process is running."
-        : "A visible temporary browser was opened. Sign in to ONES there, then call the requested ticket tool again. The session remains only while this MCP process is running.",
+      message: authorizationState === "authorized"
+        ? "A visible temporary browser was opened and automatic direct login was confirmed by ONES. The session is ready for ticket tools and remains only while this MCP process is running."
+        : authorizationState === "pending"
+          ? "A visible temporary browser was opened and direct-login credentials were submitted, but ONES authorization is still pending. Keep the window open and retry the same ticket operation shortly; no specific authentication challenge was detected."
+          : "A visible temporary browser requires an interactive sign-in action. Complete the actual action in the window, then retry the requested ticket tool.",
       authentication: {
         mode: autoLoginConfigured ? "auto" : "manual",
         authorized: authorization.authorized,
+        state: authorizationState,
         diagnostics: authorization.diagnostics,
       },
       created,
@@ -108,18 +112,31 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
   override async status(ticketProfile: TicketProfile): Promise<ConnectionStatus> {
     const profile = this.profileFor(ticketProfile);
     if (profile.source !== "browser") return super.status(ticketProfile);
-    if (!this.page || this.page.isClosed() || this.activeProfileName !== ticketProfile.name) {
-      return { configured: true, credentialAvailable: false, authorized: false, diagnostics: ["open the supervised browser session and sign in to ONES before using this profile"] };
+    const page = this.page;
+    if (!page || page.isClosed() || this.activeProfileName !== ticketProfile.name) {
+      return { configured: true, credentialAvailable: false, authorized: false, authorizationState: "manual-action-required", diagnostics: ["open the supervised browser session and sign in to ONES before using this profile"] };
+    }
+    if (!this.isAllowedBrowserPage(profile, page)) {
+      return { configured: true, credentialAvailable: true, authorized: false, authorizationState: "manual-action-required", diagnostics: ["the visible browser left the configured ONES host after sign-in; complete the active authentication flow in that window"] };
     }
     try {
       // 授权探测只执行最小受控搜索，不触发旧的树形视图校准。
       await this.search(ticketProfile, myOpenTicketSearchQuery(1));
-      return { configured: true, credentialAvailable: true, authorized: true, diagnostics: ["the visible supervised browser session was accepted by ONES"] };
+      return { configured: true, credentialAvailable: true, authorized: true, authorizationState: "authorized", diagnostics: ["the visible supervised browser session was accepted by ONES"] };
     } catch (error) {
-      if (error instanceof OnesError && (error.code === "SOURCE_UNAUTHORIZED" || error.code === "HUMAN_ACTION_REQUIRED")) {
-        return { configured: true, credentialAvailable: true, authorized: false, diagnostics: ["sign in to ONES in the visible browser session, then retry"] };
+      if (error instanceof OnesError && error.code === "SOURCE_UNAUTHORIZED") {
+        const automaticLoginConfigured = Boolean(profile.browser?.autoLogin);
+        return {
+          configured: true,
+          credentialAvailable: true,
+          authorized: false,
+          authorizationState: automaticLoginConfigured ? "pending" : "manual-action-required",
+          diagnostics: [automaticLoginConfigured ? "automatic direct login was submitted; ONES authorization is still pending" : "sign in to ONES in the visible browser session, then retry"],
+        };
       }
-      if (error instanceof OnesError) return { configured: true, credentialAvailable: true, authorized: false, diagnostics: [`browser authorization probe failed: ${error.code}`] };
+      if (error instanceof OnesError && error.code === "HUMAN_ACTION_REQUIRED") {
+        return { configured: true, credentialAvailable: true, authorized: false, authorizationState: "manual-action-required", diagnostics: ["ONES authorization probe detected an interactive authentication challenge"] };
+      }
       throw error;
     }
   }
@@ -168,7 +185,7 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
         for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
         return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: btoa(binary) };
       }, { value: url.toString(), maxBytes: options?.maxBytes }) as { status: number; contentType: string; retryAfter?: string; base64: string; tooLarge?: boolean };
-      if (encoded.status === 401 || encoded.status === 403) throw new OnesError("HUMAN_ACTION_REQUIRED", "ONES requires an authenticated visible browser session for attachment download");
+      if (encoded.status === 401 || encoded.status === 403) throw new OnesError("SOURCE_UNAUTHORIZED", "ONES requires an authenticated visible browser session for attachment download");
       if (encoded.status === 429) throw this.rateLimited("attachment download was rate limited", encoded.retryAfter ?? null);
       if (encoded.status < 200 || encoded.status >= 300) throw new OnesError("SOURCE_FAILED", `attachment download returned ${encoded.status}`);
       if (encoded.tooLarge) throw new OnesError("EXPORT_LIMIT_EXCEEDED", `attachment download exceeds the configured per-file limit of ${options?.maxBytes ?? 0} bytes`);
@@ -177,20 +194,30 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
   }
 
   /**
-   * 表单提交成功不等于 ONES 会话已立即可用；只在短暂结算窗口内重试，
-   * MFA、SSO 和 CAPTCHA 仍交由用户在可见窗口中完成。
+   * 表单提交成功不等于 ONES 会话已立即可用；在有界窗口内等待授权结算。
+   * 只有可观察到挑战证据时才返回人工操作状态。
    */
   private async waitForAutoLoginAuthorization(
     ticketProfile: TicketProfile,
     page: Page,
   ): Promise<ConnectionStatus> {
-    let authorization: ConnectionStatus = { configured: true, credentialAvailable: true, authorized: false, diagnostics: ["browser authorization is pending"] };
+    const profile = this.profileFor(ticketProfile);
+    let authorization: ConnectionStatus = { configured: true, credentialAvailable: true, authorized: false, authorizationState: "pending", diagnostics: ["browser authorization is pending"] };
     for (const delay of AUTO_LOGIN_AUTHORIZATION_DELAYS_MS) {
       await page.waitForTimeout(delay);
+      if (!this.isAllowedBrowserPage(profile, page)) {
+        return {
+          configured: true,
+          credentialAvailable: true,
+          authorized: false,
+          authorizationState: "manual-action-required",
+          diagnostics: ["the visible browser left the configured ONES host after direct login; complete the active authentication flow in that window"],
+        };
+      }
       authorization = await this.status(ticketProfile);
-      if (authorization.authorized) return authorization;
+      if (authorization.authorized || authorization.authorizationState === "manual-action-required") return authorization;
     }
-    return authorization;
+    return { ...authorization, authorizationState: "pending" };
   }
 
   /** 通过可见页面的同源 fetch 发送 ONES 请求，并维护 CSRF token。 */
@@ -217,9 +244,6 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
       }, { url: endpoint.toString(), method, body, csrfToken: this.csrfToken }) as BrowserFetchResult;
       if (result.csrfToken) this.csrfToken = result.csrfToken;
       if (result.status === 429) throw this.rateLimited("ONES request was rate limited", result.retryAfter ?? null);
-      if (result.status === 401 || result.status === 403) {
-        throw new OnesError("HUMAN_ACTION_REQUIRED", "ONES requires an authenticated visible browser session; sign in and retry");
-      }
       return parseJsonResponse({ status: result.status, headers: new Headers({ "content-type": result.contentType }), text: result.text } satisfies HttpResponse);
     }));
   }
@@ -269,10 +293,24 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
     const login = profile.browser?.autoLogin;
     if (!login) return;
 
+    const manualActionDetails = {
+      authorizationState: "manual-action-required" as const,
+      diagnostics: ["the configured direct login form was unavailable or could not be submitted"],
+    };
+    const loginUrl = login.loginUrl ?? new URL("/login", profile.baseUrl).toString();
     try {
-      const loginUrl = login.loginUrl ?? new URL("/login", profile.baseUrl).toString();
       await page.goto(loginUrl, { waitUntil: "domcontentloaded" });
-      if (!this.isAllowedBrowserPage(profile, page)) throw new Error("login page is outside the host allowlist");
+    } catch {
+      throw new OnesError("SOURCE_FAILED", "The configured browser auto-login could not reach the direct login page");
+    }
+    if (!this.isAllowedBrowserPage(profile, page)) {
+      throw new OnesError(
+        "HUMAN_ACTION_REQUIRED",
+        "The configured browser auto-login was redirected outside the configured ONES host. Complete the visible sign-in flow manually, then retry.",
+        manualActionDetails,
+      );
+    }
+    try {
       const emailInput = page.locator(DIRECT_LOGIN_ACCOUNT_SELECTOR).first();
       const passwordInput = page.locator(DIRECT_LOGIN_PASSWORD_SELECTOR).first();
       await emailInput.waitFor({ state: "visible", timeout: 10_000 });
@@ -283,7 +321,8 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
     } catch {
       throw new OnesError(
         "HUMAN_ACTION_REQUIRED",
-        "The configured browser auto-login could not complete a controlled direct email/password login. Complete sign-in manually; MFA, CAPTCHA, SSO, and custom login pages are not automated.",
+        "The configured browser auto-login could not complete the controlled direct email/password form. Complete the visible sign-in flow manually, then retry.",
+        manualActionDetails,
       );
     }
   }
