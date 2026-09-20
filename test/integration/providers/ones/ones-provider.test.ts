@@ -5,9 +5,9 @@ import { join } from "node:path";
 import type { Page } from "playwright-core";
 import { StaticTicketProfileResolver } from "../../../../src/config/static-ticket-profile-resolver.js";
 import { TicketApplication, projectTicketForInline } from "../../../../src/modules/tickets/application/ticket-application.js";
-import { OnesConfig, parseConfig } from "../../../../src/providers/ones/ones-config.js";
+import { OnesConfig, OnesProfile, parseConfig } from "../../../../src/providers/ones/ones-config.js";
 import { HttpClient, HttpRequest, HttpResponse, parseJsonResponse } from "../../../../src/infrastructure/http/fetch-http-client.js";
-import { TicketSearchQuery } from "../../../../src/modules/tickets/domain/ticket.js";
+import { TicketAttachment, TicketSearchQuery } from "../../../../src/modules/tickets/domain/ticket.js";
 import { TicketError } from "../../../../src/modules/tickets/domain/ticket-error.js";
 import { BrowserSessionProvider, TicketBundleStore, TicketProfile, TicketProvider } from "../../../../src/modules/tickets/domain/ports.js";
 import { compileOnesTicketSearchVariables, OnesGraphqlSource } from "../../../../src/providers/ones/ones-graphql-source.js";
@@ -182,6 +182,51 @@ class AttachmentUrlSource extends OnesGraphqlSource {
   }
 }
 
+class ResolverShapeSource extends OnesGraphqlSource {
+  readonly paths: string[] = [];
+
+  constructor(config: OnesConfig, private readonly outcomes: unknown[]) {
+    super(config);
+  }
+
+  async resolve(profile: OnesConfig["profiles"][string]): Promise<URL> {
+    return this.resolveAttachmentUrl(profile, "attachment-1");
+  }
+
+  protected override async requestJson(_profile: OnesProfile, _method: "GET" | "POST", relativePath: string): Promise<unknown> {
+    this.paths.push(relativePath);
+    const outcome = this.outcomes[this.paths.length - 1];
+    if (outcome instanceof Error) throw outcome;
+    if (outcome === undefined) throw new TicketError("SOURCE_FAILED", "attachment resolver rejected the request");
+    return outcome;
+  }
+}
+
+class DownloadTestBrowserSource extends OnesBrowserSource {
+  constructor(
+    config: OnesConfig,
+    private readonly downloadResult: { status: number; contentType: string; base64: string; tooLarge?: boolean; errorBody?: string },
+  ) {
+    super(config);
+  }
+
+  bindPage(profileName: string): void {
+    const source = this as unknown as { page?: Page; activeProfileName?: string };
+    source.page = {
+      isClosed: () => false,
+      url: () => "https://tenant.example.test/project/#/workspace",
+      evaluate: async (_callback: unknown, argument: { value?: string; url?: string }) => (argument.url ?? argument.value ?? "").includes("/res/attachment/")
+        ? { status: 200, contentType: "application/json", text: JSON.stringify({ url: "/api/project/file/attachment/abc?token=temporary" }) }
+        : this.downloadResult,
+    } as unknown as Page;
+    source.activeProfileName = profileName;
+  }
+
+  async downloadForTest(profile: TicketProfile, attachment: TicketAttachment): Promise<{ bytes: Uint8Array; contentType?: string }> {
+    return this.downloadAttachment(profile, attachment);
+  }
+}
+
 class ConnectTestBrowserSource extends OnesBrowserSource {
   readonly authorizationWaits: number[] = [];
   private authorizationCall = 0;
@@ -298,6 +343,22 @@ try {
     outsideHostError = String(error);
   }
   assert.match(outsideHostError, /outside the profile allowlist/);
+  const shapeSource = new ResolverShapeSource(config, [{ url: "/api/project/file/attachment/abc" }]);
+  assert.equal((await shapeSource.resolve(config.profiles.demo!)).toString(), "https://tenant.example.test/api/project/file/attachment/abc");
+  assert.deepEqual(shapeSource.paths, ["res/attachment/attachment-1?action=download"], "attachment resolution must not route convertible documents through the ONES preview conversion service");
+  const fallbackShapeSource = new ResolverShapeSource(config, [{ status: 1 }, { url: "/api/project/file/attachment/legacy" }]);
+  assert.equal((await fallbackShapeSource.resolve(config.profiles.demo!)).toString(), "https://tenant.example.test/api/project/file/attachment/legacy");
+  assert.deepEqual(fallbackShapeSource.paths, ["res/attachment/attachment-1?action=download", "res/attachment/attachment-1?op=download&action=download"]);
+  const rejectedShapeSource = new ResolverShapeSource(config, [new TicketError("SOURCE_UNAUTHORIZED", "Source returned 401")]);
+  let rejectedShapeError = "";
+  try {
+    await rejectedShapeSource.resolve(config.profiles.demo!);
+    assert.fail("an unauthorized attachment resolution must not retry the legacy resolver shape");
+  } catch (error) {
+    rejectedShapeError = String(error);
+  }
+  assert.match(rejectedShapeError, /Source returned 401/);
+  assert.deepEqual(rejectedShapeSource.paths, ["res/attachment/attachment-1?action=download"]);
   const missingCredentialConfig = JSON.parse(JSON.stringify(config)) as { profiles: Record<string, Record<string, unknown>> };
   delete missingCredentialConfig.profiles.demo!.secretRef;
   assert.throws(() => parseConfig(missingCredentialConfig), { name: "TicketError" });
@@ -344,6 +405,29 @@ try {
     "fill:password:test-only-password",
     "click:submit",
   ]);
+  const browserDownloadConfig = parseConfig(browserProfileConfig);
+  const downloadedSource = new DownloadTestBrowserSource(browserDownloadConfig, { status: 200, contentType: "image/png", base64: Buffer.from("image-bytes").toString("base64") });
+  downloadedSource.bindPage("demo");
+  const browserDownload = await downloadedSource.downloadForTest(ticketProfile(browserDownloadConfig), { id: "attachment-1", name: "a.png" });
+  assert.equal(new TextDecoder().decode(browserDownload.bytes), "image-bytes");
+  assert.equal(browserDownload.contentType, "image/png");
+  const failedDownloadSource = new DownloadTestBrowserSource(browserDownloadConfig, {
+    status: 500,
+    contentType: "application/json",
+    base64: "",
+    errorBody: JSON.stringify({ code: 500, errcode: "ServerError", type: "ServerError" }),
+  });
+  failedDownloadSource.bindPage("demo");
+  let downloadError = "";
+  try {
+    await failedDownloadSource.downloadForTest(ticketProfile(browserDownloadConfig), { id: "attachment-1", name: "a.xlsx" });
+    assert.fail("a 500 attachment download must fail");
+  } catch (error) {
+    downloadError = String(error);
+  }
+  assert.match(downloadError, /attachment download returned 500/);
+  assert.match(downloadError, /errcode=ServerError/);
+  assert.doesNotMatch(downloadError, /token=temporary/);
   const accountLoginCalls: string[] = [];
   await new TestableBrowserSource(autoLoginConfig).triggerAutoLogin(autoLoginConfig.profiles.demo!, mockLoginPage(accountLoginCalls, false, undefined, "account"));
   assert.deepEqual(accountLoginCalls.slice(1), [
@@ -425,6 +509,14 @@ try {
   assert.equal(normalizeOnesTicket(config.profiles.demo!, {
     ...rawTicket,
     detail: { ...(rawTicket.detail as Record<string, unknown>), createTime: 1786439549000 },
+  }).createdAt, "2026-08-11 17:12:29");
+  assert.equal(normalizeOnesTicket(config.profiles.demo!, {
+    ...rawTicket,
+    detail: { ...(rawTicket.detail as Record<string, unknown>), createTime: 1786439549000000 },
+  }).createdAt, "2026-08-11 17:12:29");
+  assert.equal(normalizeOnesTicket(config.profiles.demo!, {
+    ...rawTicket,
+    detail: { ...(rawTicket.detail as Record<string, unknown>), createTime: "1786439549000000" },
   }).createdAt, "2026-08-11 17:12:29");
   assert.equal(ticket.attachments.length, 1);
   assert.equal(ticket.source.ticketKey, "P-1");

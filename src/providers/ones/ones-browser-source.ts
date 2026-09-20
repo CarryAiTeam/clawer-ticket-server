@@ -5,7 +5,7 @@ import { TicketAttachment } from "../../modules/tickets/domain/ticket.js";
 import { TicketError as OnesError } from "../../modules/tickets/domain/ticket-error.js";
 import { BrowserSessionProvider, BrowserSessionStatus, ConnectionStatus, TicketMediaDownload, TicketMediaDownloadOptions, TicketProfile } from "../../modules/tickets/domain/ports.js";
 import { HttpResponse, parseJsonResponse } from "../../infrastructure/http/fetch-http-client.js";
-import { OnesGraphqlSource, myOpenTicketSearchQuery } from "./ones-graphql-source.js";
+import { OnesGraphqlSource, describeOnesErrorBody, myOpenTicketSearchQuery } from "./ones-graphql-source.js";
 
 type BrowserFetchResult = { status: number; text: string; contentType: string; csrfToken?: string; retryAfter?: string };
 const DEFAULT_CHROME_PATHS = [
@@ -151,7 +151,7 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
       const page = this.requireActivePage(profile);
       const encoded = await page.evaluate(async ({ value, maxBytes }) => {
         const response = await fetch(value, { credentials: "include" });
-        if (!response.ok) return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: "" };
+        if (!response.ok) return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: "", errorBody: (await response.text()).slice(0, 2_000) };
         const declaredSize = Number(response.headers.get("content-length"));
         if (maxBytes !== undefined && Number.isSafeInteger(declaredSize) && declaredSize > maxBytes) {
           return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: "", tooLarge: true };
@@ -184,10 +184,10 @@ export class OnesBrowserSource extends OnesGraphqlSource implements BrowserSessi
         let binary = "";
         for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
         return { status: response.status, contentType: response.headers.get("content-type") ?? "", retryAfter: response.headers.get("retry-after") ?? undefined, base64: btoa(binary) };
-      }, { value: url.toString(), maxBytes: options?.maxBytes }) as { status: number; contentType: string; retryAfter?: string; base64: string; tooLarge?: boolean };
+      }, { value: url.toString(), maxBytes: options?.maxBytes }) as { status: number; contentType: string; retryAfter?: string; base64: string; tooLarge?: boolean; errorBody?: string };
       if (encoded.status === 401 || encoded.status === 403) throw new OnesError("SOURCE_UNAUTHORIZED", "ONES requires an authenticated visible browser session for attachment download");
       if (encoded.status === 429) throw this.rateLimited("attachment download was rate limited", encoded.retryAfter ?? null);
-      if (encoded.status < 200 || encoded.status >= 300) throw new OnesError("SOURCE_FAILED", `attachment download returned ${encoded.status}`);
+      if (encoded.status < 200 || encoded.status >= 300) throw new OnesError("SOURCE_FAILED", `attachment download returned ${encoded.status}${describeOnesErrorBody(encoded.contentType, encoded.errorBody ?? "")}`);
       if (encoded.tooLarge) throw new OnesError("EXPORT_LIMIT_EXCEEDED", `attachment download exceeds the configured per-file limit of ${options?.maxBytes ?? 0} bytes`);
       return { attachment, bytes: Uint8Array.from(Buffer.from(encoded.base64, "base64")), ...(encoded.contentType ? { contentType: encoded.contentType } : {}) };
     }));

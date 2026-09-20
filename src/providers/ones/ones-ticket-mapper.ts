@@ -8,13 +8,15 @@ const asRecord = (value: unknown): UnknownRecord => (value !== null && typeof va
 const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
 const text = (value: unknown): string | undefined => (typeof value === "string" && value.trim() ? value.trim() : undefined);
 
-/** 将 ONES 的秒级或毫秒级时间戳转换为页面一致的中国标准时间。 */
+/** 将 ONES 的秒级、毫秒级或微秒级时间戳转换为页面一致的中国标准时间。 */
 function timeText(value: unknown): string | undefined {
   const raw = text(value);
-  if (raw && !/^\d{10}(?:\d{3})?$/.test(raw)) return raw;
+  if (raw && !/^\d{10}(?:\d{3})?(?:\d{3})?$/.test(raw)) return raw;
   const numeric = typeof value === "number" ? value : raw ? Number(raw) : NaN;
   if (!Number.isFinite(numeric)) return undefined;
-  const milliseconds = Math.abs(numeric) < 100_000_000_000 ? numeric * 1_000 : numeric;
+  const milliseconds = Math.abs(numeric) < 100_000_000_000 ? numeric * 1_000
+    : Math.abs(numeric) < 100_000_000_000_000 ? numeric
+      : numeric / 1_000;
   const date = new Date(milliseconds);
   if (Number.isNaN(date.getTime())) return undefined;
   const values = new Intl.DateTimeFormat("zh-CN", {

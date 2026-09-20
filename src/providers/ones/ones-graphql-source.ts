@@ -73,6 +73,31 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/**
+ * 附件解析形态。ONES 的 `op=download` 会把可转换文档交给预览转换服务，
+ * 该链路对部分附件返回 ServerError 并拿不到原始字节；不带该参数时返回原始文件端点。
+ * 旧形态仅用于兼容不接受新形态的来源部署。
+ */
+const ATTACHMENT_RESOLVER_QUERIES = ["?action=download", "?op=download&action=download"] as const;
+
+/** ONES 错误响应只投影受控字段，避免把原始来源响应体带出 provider。 */
+const ONES_ERROR_SUMMARY_FIELDS = ["code", "errcode", "type", "reason", "message", "error"] as const;
+
+/** 生成有界的 ONES 错误摘要；非 JSON 响应不参与投影。 */
+export function describeOnesErrorBody(contentType: string | undefined, body: string): string {
+  if (!contentType?.toLocaleLowerCase().includes("application/json")) return "";
+  let parsed: unknown;
+  try { parsed = JSON.parse(body); } catch { return ""; }
+  const record = asRecord(parsed);
+  const parts = ONES_ERROR_SUMMARY_FIELDS
+    .map((field) => {
+      const value = record[field];
+      return typeof value === "string" || typeof value === "number" ? `${field}=${String(value).slice(0, 80)}` : undefined;
+    })
+    .filter((part): part is string => part !== undefined);
+  return parts.length > 0 ? ` (${parts.join(", ")})` : "";
+}
+
 /** 连接状态只需执行一个最小的受控搜索，不再依赖旧的树形待办查询。 */
 export function myOpenTicketSearchQuery(size: number): TicketSearchQuery {
   return {
@@ -262,13 +287,27 @@ export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
 
   /** 临时 URL 仅保留在内存中，绝不写入 CanonicalTicket。 */
   protected async resolveAttachmentUrl(profile: OnesProfile, attachmentId: string): Promise<URL> {
-    const result = asRecord(await this.requestJson(profile, "GET", `res/attachment/${encodeURIComponent(attachmentId)}?op=download&action=download`));
-    const value = stringValue(result.url);
-    if (!value) throw new OnesError("SOURCE_SCHEMA_CHANGED", "attachment resolver did not return url");
+    const value = await this.resolveAttachmentUrlValue(profile, attachmentId);
     let url: URL;
     try { url = new URL(value, profile.baseUrl); } catch { throw new OnesError("SOURCE_SCHEMA_CHANGED", "attachment resolver returned an invalid url"); }
     if (!profile.allowedHosts.includes(url.host)) throw new OnesError("SOURCE_FAILED", "attachment resolver returned a host outside the profile allowlist");
     return url;
+  }
+
+  /** 依次尝试受控解析形态；仅当形态本身不被来源接受时才回退，授权与限流错误保持终止。 */
+  private async resolveAttachmentUrlValue(profile: OnesProfile, attachmentId: string): Promise<string> {
+    const path = `res/attachment/${encodeURIComponent(attachmentId)}`;
+    let lastError: unknown = new OnesError("SOURCE_SCHEMA_CHANGED", "attachment resolver did not return url");
+    for (const query of ATTACHMENT_RESOLVER_QUERIES) {
+      try {
+        const value = stringValue(asRecord(await this.requestJson(profile, "GET", `${path}${query}`)).url);
+        if (value) return value;
+      } catch (error) {
+        lastError = error;
+        if (!(error instanceof OnesError) || (error.code !== "SOURCE_SCHEMA_CHANGED" && error.code !== "SOURCE_FAILED")) throw error;
+      }
+    }
+    throw lastError;
   }
 
   protected async downloadResolvedAttachment(profile: OnesProfile, attachment: TicketAttachment, url: URL, options?: TicketMediaDownloadOptions): Promise<TicketMediaDownload> {
@@ -279,7 +318,10 @@ export class OnesGraphqlSource implements TicketProvider, TicketMediaProvider {
       const response = await fetch(url, { headers: { [profile.authentication.headerName]: authorization }, redirect: "manual" });
       if (response.status === 401 || response.status === 403) throw new OnesError("SOURCE_UNAUTHORIZED", `attachment download returned ${response.status}`);
       if (response.status === 429) throw new OnesRateLimitError("attachment download was rate limited", retryAfterMilliseconds(response.headers.get("retry-after"), this.now()));
-      if (!response.ok) throw new OnesError("SOURCE_FAILED", `attachment download returned ${response.status}`);
+      if (!response.ok) {
+        const summary = describeOnesErrorBody(response.headers.get("content-type") ?? undefined, await response.text());
+        throw new OnesError("SOURCE_FAILED", `attachment download returned ${response.status}${summary}`);
+      }
       const contentType = response.headers.get("content-type") ?? undefined;
       const bytes = await readAttachmentBytes(response, options?.maxBytes);
       return { attachment, bytes, ...(contentType ? { contentType } : {}) };
